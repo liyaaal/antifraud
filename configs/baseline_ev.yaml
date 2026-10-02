@@ -1,0 +1,7 @@
+name: baseline_ev
+author: team
+blocks:
+- base
+model: lgbm
+policy: ev_cap
+calibration: isotonic

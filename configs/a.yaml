@@ -1,0 +1,6 @@
+name: a
+author: A
+blocks: [base, a]
+model: logreg
+policy: ev_cap
+calibration: isotonic

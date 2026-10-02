@@ -1,0 +1,7 @@
+name: b_nomono
+author: B
+blocks: [base, b]
+model: lgbm
+monotone: false
+policy: ev_cap
+calibration: isotonic

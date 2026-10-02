@@ -1,0 +1,7 @@
+name: c
+author: C
+blocks: [base, c]
+model: lgbm
+sample_weight: cost
+calibration: isotonic
+policy: ev_cap

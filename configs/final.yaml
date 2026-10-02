@@ -1,0 +1,12 @@
+name: final
+author: team
+# Признаки: сырые поля + профиль A + ритм B + перцентиль суммы из C.
+# Исключены отвергнутые гипотезы и контроли (см. reports/feature_map.csv, decision_log.md).
+blocks: [base, a, b, c]
+exclude: [a_new_merchant, a_geo_km, a_amt_down, b_cnt_24h_window, b_sess_cat_n,
+          c_risk_cat_hour, c_risk_cat_amtbin, c_risk_age_cat, c_risk_merchant]
+model: lgbm
+monotone: false
+sample_weight: cost
+calibration: isotonic
+policy: ev_cap

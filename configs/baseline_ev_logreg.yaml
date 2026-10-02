@@ -1,0 +1,7 @@
+name: baseline_ev_logreg
+author: team
+blocks:
+- base
+model: logreg
+policy: ev_cap
+calibration: isotonic

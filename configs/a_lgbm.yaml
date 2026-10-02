@@ -1,0 +1,7 @@
+name: a_lgbm
+author: A
+blocks: [base, a]
+model: lgbm
+policy: ev_cap
+calibration: isotonic
+note: контроль — те же признаки A на LightGBM

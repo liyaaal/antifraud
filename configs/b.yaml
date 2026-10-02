@@ -1,0 +1,7 @@
+name: b
+author: B
+blocks: [base, b]
+model: lgbm
+monotone: true
+policy: ev_cap
+calibration: isotonic
