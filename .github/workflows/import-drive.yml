@@ -1,0 +1,79 @@
+name: Import Drive project
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  import-drive:
+    if: ${{ !contains(github.event.head_commit.message || '', 'Import antifraud project from Drive') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Download Drive folder
+        run: |
+          python -m pip install --upgrade pip gdown
+          rm -rf drive_src
+          gdown --folder 'https://drive.google.com/drive/folders/1XkJOzEu9WI9neSvWKWyCX_ltGjQWS-Ko' -O drive_src --remaining-ok
+      - name: Copy project files
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$(find drive_src -name README.md -printf '%h\n' | head -n 1)"
+          if [ -z "$src" ]; then
+            echo 'README.md not found in downloaded Drive folder'
+            find drive_src -maxdepth 3 -type f | head -n 50
+            exit 1
+          fi
+          cp -a "$src"/. .
+      - name: Clean files that should not be committed
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .venv venv
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          rm -rf data/cache
+          rm -f data/*.csv
+          rm -rf drive_src
+          mkdir -p data
+          printf '%s\n' 'Raw datasets are intentionally not committed. Put fraudTrain.csv here before training.' > data/README.md
+          cat > .gitignore <<'EOF'
+          .venv/
+          venv/
+          __pycache__/
+          *.py[cod]
+          .pytest_cache/
+          .mypy_cache/
+          .ruff_cache/
+
+          data/*.csv
+          data/cache/
+
+          .env
+          .DS_Store
+          Thumbs.db
+          EOF
+          sed -i 's/^          //' .gitignore
+      - name: Commit imported project
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git status --short
+          if git diff --cached --quiet; then
+            echo 'No changes to commit'
+            exit 0
+          fi
+          git commit -m 'Import antifraud project from Drive'
+          git push
