@@ -1,0 +1,96 @@
+name: Restore Drive source files
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download real source files from Drive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/drive_files.tsv <<'EOF'
+          17gcEh5ZmVPbQdMy8u2JkVb8qLoRxDiwL|train.py
+          1mgXHOJbsfZ5It7V_0uib3J0YfCzX6Xgv|score.py
+          1MxEMPFcm9E6f-e1l-OASkbkjafrB-GJr|src/calibration.py
+          1ycfSk2VulXTyd-y8GcJpK2yV1_ZlS-zr|src/data.py
+          1bIxBkMEnenC_cBVO6-Uz-5qATdohttuq|src/economics.py
+          1cURYpyJVtvMerEEN3zNHRFx-GeL-pUkD|src/eda.py
+          1yW6UZ31HUnAkBtYZooLWhElNs7MxiaE1|src/evaluate.py
+          1GOde7VeKseYJ-JWaoF_1ptjgRQOqXgN-|src/models.py
+          1Rein1NsjtooUQqMu_2i-9BnV44xXey4s|src/pipeline.py
+          1M4roq7tl5UA-yZQiX8FZf7VPKrG5hVKz|src/reasons.py
+          1yH1YkPwv6_zr_9wJbAyF7EZ-ABzgeE6h|src/split.py
+          11gVlXFrWNWdM8MsIppzSdnj_fjEcuc8o|src/features/__init__.py
+          1tZ7Zj0Rz1hFT_BGkQuQpY9fzoEHdVkm4|src/features/_util.py
+          1jLNZ8pqhgg5ZOHSw1T9yZhGiFQE73EGB|src/features/base.py
+          13Q1RvCgqPwEY_Jyc7QvN1mrGvXGpUZm0|src/features/context.py
+          1MZ_o7BGGa8yOrmlo8aLqfQltYFPyN8Xl|src/features/profile.py
+          151fMKCaJ02gWO_lKsIlUdPoqmIM_gp6C|src/features/velocity.py
+          1_3wH0v91VmnA_LCR0duPdS4eITXGMM78|experiments/b_session_gap.py
+          1FAnJtzqm46fKVkyf71wVIp3KRv1JLXgf|experiments/build_feature_map.py
+          1U0PN-vIo8moPPkpN4_-LJwtuFqQSpxaf|experiments/c_experiments.py
+          12gdSFbba-rTvnm5gnu9HVTGk9cBA20IH|experiments/economics_report.py
+          1VwVhUFywKfuiCJnKDG-Bf3B8ZkLMaH6C|experiments/examples.py
+          1wtZJt8O5qjbfjLsRTZCQa6ckSk32EAe_|experiments/scenarios.py
+          1Tzj0uYz9yetZU2EEcqL-aMqnolEy7-_6|experiments/tournament.py
+          1-KLRxn1JWUSVv9vpIcKFScYxEzMqGg2v|tests/test_no_future_leak.py
+          1YgiaIwMq-9A7zu_kuRAoYgMXwoM24Wvz|tests/test_leak_canary.py
+          1j-AQoiiN2gTLhm-Mi8nEjpWmENMJFfoS|tests/test_score_robustness.py
+          1Rbe4dm5qlCPj2MAk6jKrpfS2NgndpEL-|docs/build_docs.py
+          1sIS6RhLJnIXv-TAbUNKQacWAbGVGNssq|docs/make_figures.py
+          1A7r8F6LyB_TxHKnEoXNpV97yibmo0a-k|docs/export_pdf.ps1
+          10rVg8JcimyhMKgUJF8Uy43jm2W4xDAsO|presentation/build_deck.py
+          14cFJnUIiL_Fnp8C1Ca4tKOVVwp6ipj4f|presentation/fx.ps1
+          1r9-caer8_bb_aQFhaqLwyE4R_9iL7YyO|presentation/old/build_deck_v1.py
+          1_2gUxOi5DwCEOaXGc7bL3Zmbj6_iLB8D|tools/restore_damaged.ps1
+          EOF
+
+          while IFS='|' read -r id path; do
+            id="${id#${id%%[![:space:]]*}}"
+            path="${path%$'\r'}"
+            [ -z "$id" ] && continue
+            mkdir -p "$(dirname "$path")"
+            tmp="$(mktemp)"
+            url="https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t"
+            echo "Restoring $path"
+            curl -L --retry 3 --retry-delay 2 --fail "$url" -o "$tmp"
+            if head -c 200 "$tmp" | grep -qi '<!DOCTYPE html'; then
+              echo "Downloaded HTML instead of file for $path" >&2
+              exit 1
+            fi
+            mv "$tmp" "$path"
+          done < /tmp/drive_files.tsv
+
+      - name: Syntax check restored Python files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            train.py score.py \
+            src/*.py src/features/*.py \
+            experiments/*.py tests/*.py \
+            docs/*.py presentation/*.py presentation/old/*.py
+
+      - name: Commit restored files and remove workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/restore-drive-files.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add train.py score.py src experiments tests docs presentation tools .github/workflows/restore-drive-files.yml
+          git status --short
+          git commit -m "Restore source files from Drive" || exit 0
+          git push
