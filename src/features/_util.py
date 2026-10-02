@@ -1,1 +1,104 @@
-<!DOCTYPE html><html><head><title>Google Drive - Virus scan warning</title><meta http-equiv="content-type" content="text/html; charset=utf-8"/><style nonce="RIclYSeBTz-oZGb1UolKkw">.goog-link-button{position:relative;color:#15c;text-decoration:underline;cursor:pointer}.goog-link-button-disabled{color:#ccc;text-decoration:none;cursor:default}body{color:#222;font:normal 13px/1.4 arial,sans-serif;margin:0}.grecaptcha-badge{visibility:hidden}.uc-main{padding-top:50px;text-align:center}#uc-dl-icon{display:inline-block;margin-top:16px;padding-right:1em;vertical-align:top}#uc-text{display:inline-block;max-width:68ex;text-align:left}.uc-error-caption,.uc-warning-caption{color:#222;font-size:16px}#uc-download-link{text-decoration:none}.uc-name-size a{color:#15c;text-decoration:none}.uc-name-size a:visited{color:#61c;text-decoration:none}.uc-name-size a:active{color:#d14836;text-decoration:none}.uc-footer{color:#777;font-size:11px;padding-bottom:5ex;padding-top:5ex;text-align:center}.uc-footer a{color:#15c}.uc-footer a:visited{color:#61c}.uc-footer a:active{color:#d14836}.uc-footer-divider{color:#ccc;width:100%}.goog-inline-block{position:relative;display:-moz-inline-box;display:inline-block}* html .goog-inline-block{display:inline}:first-child+html .goog-inline-block{display:inline}sentinel{}</style><link rel="icon" href="//ssl.gstatic.com/docs/doclist/images/drive_favicon_2026_32dp.png"/></head><body><div class="uc-main"><div id="uc-dl-icon" class="image-container"><div class="drive-sprite-aux-download-file"></div></div><div id="uc-text"><p class="uc-warning-caption">Google Drive can't scan this file for viruses.</p><p class="uc-warning-subcaption">This file is executable and may harm your computer. <p class="uc-warning-subcaption"><span class="uc-name-size"><a href="/open?id=1tZ7Zj0Rz1hFT_BGkQuQpY9fzoEHdVkm4">_util.py</a> (4.0k)</span></p></p><form id="download-form" action="https://drive.usercontent.google.com/download" method="get"><input type="submit" id="uc-download-link" class="goog-inline-block jfk-button jfk-button-action" value="Download anyway"/><input type="hidden" name="id" value="1tZ7Zj0Rz1hFT_BGkQuQpY9fzoEHdVkm4"><input type="hidden" name="export" value="download"><input type="hidden" name="confirm" value="t"><input type="hidden" name="uuid" value="857619a9-1f33-4f25-8b01-87cb80f2a0e4"></form></div></div><div class="uc-footer"><hr class="uc-footer-divider"></div></body></html>
+"""Общие кирпичики для признаков по истории. Всё считается строго по прошлому.
+
+Операции одной карты с одинаковым временем друг друга не видят: для «ничьих» по времени
+берётся значение первой строки группы (card, ts).
+"""
+import math
+
+import numpy as np
+import pandas as pd
+
+
+def _tie_first(values: pd.Series, df: pd.DataFrame, keys: list[str]) -> pd.Series:
+    return values.groupby([df[k] for k in keys] + [df["ts"]], sort=False, observed=True).transform("first")
+
+
+def prior_count(df: pd.DataFrame, keys: list[str]) -> pd.Series:
+    """Сколько операций с теми же keys было строго раньше."""
+    c = df.groupby(keys, sort=False, observed=True).cumcount().astype("float64")
+    return _tie_first(c, df, keys)
+
+
+def prior_sum(df: pd.DataFrame, x: pd.Series, keys: list[str]) -> pd.Series:
+    """Сумма x по операциям с теми же keys строго раньше."""
+    cs = x.groupby([df[k] for k in keys], sort=False, observed=True).cumsum() - x
+    return _tie_first(cs, df, keys)
+
+
+def hours(ts: pd.Series) -> np.ndarray:
+    return ts.to_numpy().astype("datetime64[s]").astype("int64") / 3600.0
+
+
+def ewma_prior(card: np.ndarray, t: np.ndarray, x: np.ndarray, halflife_h: float) -> np.ndarray:
+    """Экспоненциально взвешенное среднее x по прошлым операциям карты (вес 1/2 каждые halflife_h часов).
+
+    Массивы упорядочены по (card, t). Нет истории -> NaN.
+    """
+    lam = math.log(2) / halflife_h
+    out = np.full(len(t), np.nan)
+    N = D = 0.0
+    last_t = cur_t = None
+    pend_x = pend_c = 0.0
+    prev_card = None
+    exp = math.exp
+    for i in range(len(t)):
+        ci, ti = card[i], t[i]
+        if ci != prev_card:
+            N = D = 0.0
+            last_t = cur_t = None
+            pend_x = pend_c = 0.0
+            prev_card = ci
+        if cur_t is None or ti != cur_t:
+            if cur_t is not None:
+                dec = exp(-(cur_t - last_t) * lam) if last_t is not None else 1.0
+                N = N * dec + pend_x
+                D = D * dec + pend_c
+                last_t = cur_t
+            pend_x = pend_c = 0.0
+            cur_t = ti
+        if D > 0:
+            out[i] = N / D
+        pend_x += x[i]
+        pend_c += 1.0
+    return out
+
+
+def decayed_sums(card: np.ndarray, t: np.ndarray, x: np.ndarray, tau_h: float) -> np.ndarray:
+    """Σ x_j · exp(−(t_i − t_j)/τ) по прошлым операциям карты (строго раньше t_i).
+
+    При x = 1 это затухающая интенсивность — «сколько операций было недавно».
+    """
+    out = np.zeros(len(t))
+    S = 0.0
+    last_t = cur_t = None
+    pend = 0.0
+    prev_card = None
+    exp = math.exp
+    for i in range(len(t)):
+        ci, ti = card[i], t[i]
+        if ci != prev_card:
+            S = 0.0
+            last_t = cur_t = None
+            pend = 0.0
+            prev_card = ci
+        if cur_t is None or ti != cur_t:
+            if cur_t is not None:
+                S = (S * exp(-(cur_t - last_t) / tau_h) if last_t is not None else 0.0) + pend
+                last_t = cur_t
+            pend = 0.0
+            cur_t = ti
+        out[i] = S * exp(-(ti - last_t) / tau_h) if last_t is not None else 0.0
+        pend += x[i]
+    return out
+
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    lat1, lon1, lat2, lon2 = (np.radians(np.asarray(v, dtype="float64")) for v in (lat1, lon1, lat2, lon2))
+    a = np.sin((lat2 - lat1) / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin((lon2 - lon1) / 2) ** 2
+    return 6371.0 * 2 * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
+
+
+def by_card(df: pd.DataFrame):
+    """Порядок строк по (карта, время) и обратная перестановка."""
+    order = np.lexsort((df["trans_num"].to_numpy(), df["ts"].to_numpy(), df["cc_num"].to_numpy()))
+    return order

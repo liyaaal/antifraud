@@ -1,1 +1,73 @@
-<!DOCTYPE html><html><head><title>Google Drive - Virus scan warning</title><meta http-equiv="content-type" content="text/html; charset=utf-8"/><style nonce="oehyp3qcoMj6qd0FgfSoXA">.goog-link-button{position:relative;color:#15c;text-decoration:underline;cursor:pointer}.goog-link-button-disabled{color:#ccc;text-decoration:none;cursor:default}body{color:#222;font:normal 13px/1.4 arial,sans-serif;margin:0}.grecaptcha-badge{visibility:hidden}.uc-main{padding-top:50px;text-align:center}#uc-dl-icon{display:inline-block;margin-top:16px;padding-right:1em;vertical-align:top}#uc-text{display:inline-block;max-width:68ex;text-align:left}.uc-error-caption,.uc-warning-caption{color:#222;font-size:16px}#uc-download-link{text-decoration:none}.uc-name-size a{color:#15c;text-decoration:none}.uc-name-size a:visited{color:#61c;text-decoration:none}.uc-name-size a:active{color:#d14836;text-decoration:none}.uc-footer{color:#777;font-size:11px;padding-bottom:5ex;padding-top:5ex;text-align:center}.uc-footer a{color:#15c}.uc-footer a:visited{color:#61c}.uc-footer a:active{color:#d14836}.uc-footer-divider{color:#ccc;width:100%}.goog-inline-block{position:relative;display:-moz-inline-box;display:inline-block}* html .goog-inline-block{display:inline}:first-child+html .goog-inline-block{display:inline}sentinel{}</style><link rel="icon" href="//ssl.gstatic.com/docs/doclist/images/drive_favicon_2026_32dp.png"/></head><body><div class="uc-main"><div id="uc-dl-icon" class="image-container"><div class="drive-sprite-aux-download-file"></div></div><div id="uc-text"><p class="uc-warning-caption">Google Drive can't scan this file for viruses.</p><p class="uc-warning-subcaption">This file is executable and may harm your computer. <p class="uc-warning-subcaption"><span class="uc-name-size"><a href="/open?id=1-KLRxn1JWUSVv9vpIcKFScYxEzMqGg2v">test_no_future_leak.py</a> (3.0k)</span></p></p><form id="download-form" action="https://drive.usercontent.google.com/download" method="get"><input type="submit" id="uc-download-link" class="goog-inline-block jfk-button jfk-button-action" value="Download anyway"/><input type="hidden" name="id" value="1-KLRxn1JWUSVv9vpIcKFScYxEzMqGg2v"><input type="hidden" name="export" value="download"><input type="hidden" name="confirm" value="t"><input type="hidden" name="uuid" value="2a6e2d63-38e1-4719-82fc-9a07aa25ba0c"></form></div></div><div class="uc-footer"><hr class="uc-footer-divider"></div></body></html>
+"""Тест на заглядывание в будущее (CLAUDE.md, раздел 11).
+
+Для случайных дат T признаки, посчитанные на данных до T, должны совпасть с признаками,
+посчитанными на всём файле, — для всех строк до T. Если значение изменилось, когда мы
+«дописали будущее», значит признак это будущее видел.
+
+python -m tests.test_no_future_leak --block a [--cards 150]
+Результат дописывается в reports/leak_tests.csv.
+"""
+import argparse
+import datetime as dt
+
+import numpy as np
+import pandas as pd
+
+from src.data import ROOT, load_train
+from src.features import get_block
+from src.split import assign, boundaries
+
+
+def compare(a: pd.Series, b: pd.Series):
+    if isinstance(a.dtype, pd.CategoricalDtype) or a.dtype == object:
+        a, b = a.astype("object"), b.astype("object")
+        same = (a == b) | (a.isna() & b.isna())
+        return bool(same.all()), float((~same).sum())
+    a = a.to_numpy(dtype="float64")
+    b = b.to_numpy(dtype="float64")
+    same = np.isclose(a, b, rtol=1e-5, atol=1e-6, equal_nan=True)
+    diff = np.nanmax(np.abs(a - b)) if (~same).any() else 0.0
+    return bool(same.all()), float(diff)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--block", required=True)
+    ap.add_argument("--cards", type=int, default=150)
+    ap.add_argument("--seed", type=int, default=7)
+    a = ap.parse_args()
+
+    df = load_train()
+    part = assign(df.ts, boundaries(df.ts))
+    blk = get_block(a.block)
+    state = blk.fit(df[part == "train"])
+
+    # Подвыборка по картам целиком: история каждой карты не рвётся.
+    rng = np.random.default_rng(a.seed)
+    cards = rng.choice(df.cc_num.unique(), size=a.cards, replace=False)
+    sub = df[df.cc_num.isin(cards)].reset_index(drop=True)
+    full = blk.transform(sub, state)
+
+    lo, hi = sub.ts.quantile(0.2), sub.ts.quantile(0.95)
+    dates = sorted(pd.to_datetime(rng.uniform(lo.value, hi.value, size=3).astype("int64")))
+    rows = []
+    for T in dates:
+        mask = sub.ts <= T
+        cut = blk.transform(sub[mask].copy(), state)
+        for f in blk.FEATURES:
+            ok, diff = compare(cut[f], full.loc[mask, f])
+            rows.append({"datetime": dt.datetime.now().isoformat(timespec="seconds"), "block": a.block,
+                         "feature": f, "T": str(T), "rows_checked": int(mask.sum()), "pass": ok,
+                         "max_diff": diff})
+    res = pd.DataFrame(rows)
+    out = ROOT / "reports" / "leak_tests.csv"
+    res.to_csv(out, mode="a", header=not out.exists(), index=False, encoding="utf-8")
+    summary = res.groupby("feature")["pass"].all()
+    for f, ok in summary.items():
+        print(f"{'OK   ' if ok else 'УТЕЧКА'} {f}")
+    if not summary.all():
+        raise SystemExit(f"Не прошли тест: {list(summary[~summary].index)}")
+
+
+if __name__ == "__main__":
+    main()

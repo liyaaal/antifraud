@@ -1,1 +1,37 @@
-<!DOCTYPE html><html><head><title>Google Drive - Virus scan warning</title><meta http-equiv="content-type" content="text/html; charset=utf-8"/><style nonce="u5LGBErJ8JYfgWEiejz0YQ">.goog-link-button{position:relative;color:#15c;text-decoration:underline;cursor:pointer}.goog-link-button-disabled{color:#ccc;text-decoration:none;cursor:default}body{color:#222;font:normal 13px/1.4 arial,sans-serif;margin:0}.grecaptcha-badge{visibility:hidden}.uc-main{padding-top:50px;text-align:center}#uc-dl-icon{display:inline-block;margin-top:16px;padding-right:1em;vertical-align:top}#uc-text{display:inline-block;max-width:68ex;text-align:left}.uc-error-caption,.uc-warning-caption{color:#222;font-size:16px}#uc-download-link{text-decoration:none}.uc-name-size a{color:#15c;text-decoration:none}.uc-name-size a:visited{color:#61c;text-decoration:none}.uc-name-size a:active{color:#d14836;text-decoration:none}.uc-footer{color:#777;font-size:11px;padding-bottom:5ex;padding-top:5ex;text-align:center}.uc-footer a{color:#15c}.uc-footer a:visited{color:#61c}.uc-footer a:active{color:#d14836}.uc-footer-divider{color:#ccc;width:100%}.goog-inline-block{position:relative;display:-moz-inline-box;display:inline-block}* html .goog-inline-block{display:inline}:first-child+html .goog-inline-block{display:inline}sentinel{}</style><link rel="icon" href="//ssl.gstatic.com/docs/doclist/images/drive_favicon_2026_32dp.png"/></head><body><div class="uc-main"><div id="uc-dl-icon" class="image-container"><div class="drive-sprite-aux-download-file"></div></div><div id="uc-text"><p class="uc-warning-caption">Google Drive can't scan this file for viruses.</p><p class="uc-warning-subcaption">This file is executable and may harm your computer. <p class="uc-warning-subcaption"><span class="uc-name-size"><a href="/open?id=1jLNZ8pqhgg5ZOHSw1T9yZhGiFQE73EGB">base.py</a> (1.7k)</span></p></p><form id="download-form" action="https://drive.usercontent.google.com/download" method="get"><input type="submit" id="uc-download-link" class="goog-inline-block jfk-button jfk-button-action" value="Download anyway"/><input type="hidden" name="id" value="1jLNZ8pqhgg5ZOHSw1T9yZhGiFQE73EGB"><input type="hidden" name="export" value="download"><input type="hidden" name="confirm" value="t"><input type="hidden" name="uuid" value="a963e878-7872-412b-9d15-d712ba47364b"></form></div></div><div class="uc-footer"><hr class="uc-footer-divider"></div></body></html>
+"""Подготовка сырых полей. Это не синтез признаков, а линейка для сравнения (CLAUDE.md, раздел 10)."""
+import numpy as np
+import pandas as pd
+
+PREFIX = ""
+FEATURES = ["amt", "log_amt", "category", "hour", "dow", "is_night", "is_online",
+            "age", "gender_m", "log_city_pop"]
+CATEGORICAL = ["category"]
+MONOTONE: dict = {}
+REASONS = {
+    "amt": "Крупная сумма: {amt:.2f} у.е.",
+    "log_amt": "Крупная сумма: {amt:.2f} у.е.",
+    "category": "Рискованная категория: {category}",
+    "hour": "Операция в {hour}:00",
+    "is_night": "Ночная операция ({hour}:00)",
+    "is_online": "Покупка в интернете ({category})",
+}
+
+
+def fit(train_df: pd.DataFrame) -> dict:
+    return {"categories": sorted(train_df["category"].dropna().unique().tolist())}
+
+
+def transform(df: pd.DataFrame, state: dict) -> pd.DataFrame:
+    out = pd.DataFrame(index=df.index)
+    out["amt"] = df["amt"].astype("float32")
+    out["log_amt"] = np.log1p(df["amt"].clip(lower=0)).astype("float32")
+    out["category"] = pd.Categorical(df["category"], categories=state["categories"])
+    hour = df["ts"].dt.hour
+    out["hour"] = hour.astype("float32")
+    out["dow"] = df["ts"].dt.dayofweek.astype("float32")
+    out["is_night"] = ((hour >= 22) | (hour <= 3)).astype("float32")
+    out["is_online"] = df["category"].astype("str").str.endswith("_net").astype("float32")
+    out["age"] = df["age"].astype("float32")
+    out["gender_m"] = (df["gender"] == "M").astype("float32")
+    out["log_city_pop"] = np.log1p(df["city_pop"].clip(lower=0)).astype("float32")
+    return out

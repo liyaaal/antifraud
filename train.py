@@ -1,1 +1,60 @@
-<!DOCTYPE html><html><head><title>Google Drive - Virus scan warning</title><meta http-equiv="content-type" content="text/html; charset=utf-8"/><style nonce="I5AnBhvuU5y5X1-QbIpYeQ">.goog-link-button{position:relative;color:#15c;text-decoration:underline;cursor:pointer}.goog-link-button-disabled{color:#ccc;text-decoration:none;cursor:default}body{color:#222;font:normal 13px/1.4 arial,sans-serif;margin:0}.grecaptcha-badge{visibility:hidden}.uc-main{padding-top:50px;text-align:center}#uc-dl-icon{display:inline-block;margin-top:16px;padding-right:1em;vertical-align:top}#uc-text{display:inline-block;max-width:68ex;text-align:left}.uc-error-caption,.uc-warning-caption{color:#222;font-size:16px}#uc-download-link{text-decoration:none}.uc-name-size a{color:#15c;text-decoration:none}.uc-name-size a:visited{color:#61c;text-decoration:none}.uc-name-size a:active{color:#d14836;text-decoration:none}.uc-footer{color:#777;font-size:11px;padding-bottom:5ex;padding-top:5ex;text-align:center}.uc-footer a{color:#15c}.uc-footer a:visited{color:#61c}.uc-footer a:active{color:#d14836}.uc-footer-divider{color:#ccc;width:100%}.goog-inline-block{position:relative;display:-moz-inline-box;display:inline-block}* html .goog-inline-block{display:inline}:first-child+html .goog-inline-block{display:inline}sentinel{}</style><link rel="icon" href="//ssl.gstatic.com/docs/doclist/images/drive_favicon_2026_32dp.png"/></head><body><div class="uc-main"><div id="uc-dl-icon" class="image-container"><div class="drive-sprite-aux-download-file"></div></div><div id="uc-text"><p class="uc-warning-caption">Google Drive can't scan this file for viruses.</p><p class="uc-warning-subcaption">This file is executable and may harm your computer. <p class="uc-warning-subcaption"><span class="uc-name-size"><a href="/open?id=17gcEh5ZmVPbQdMy8u2JkVb8qLoRxDiwL">train.py</a> (2.7k)</span></p></p><form id="download-form" action="https://drive.usercontent.google.com/download" method="get"><input type="submit" id="uc-download-link" class="goog-inline-block jfk-button jfk-button-action" value="Download anyway"/><input type="hidden" name="id" value="17gcEh5ZmVPbQdMy8u2JkVb8qLoRxDiwL"><input type="hidden" name="export" value="download"><input type="hidden" name="confirm" value="t"><input type="hidden" name="uuid" value="75077df4-8a06-42a1-b838-2a4995420672"></form></div></div><div class="uc-footer"><hr class="uc-footer-divider"></div></body></html>
+"""Обучение и сохранение артефактов (CLAUDE.md, раздел 12).
+
+python train.py --config configs/final.yaml
+
+Модель учится на train (до 21.02.2020), ранняя остановка и калибровка — на valid.
+Сохраняется ровно та модель, которая оценивалась на холдауте: что проверили, то и сдаём.
+"""
+import argparse
+import json
+import pickle
+import platform
+import time
+from importlib.metadata import version
+
+import numpy as np
+
+from src.data import ROOT
+from src.evaluate import feature_list, fit_predict, load_config, score_split
+from src.features import get_block
+from src.models import SEED
+from src.pipeline import load_dataset
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", default="configs/final.yaml")
+    a = ap.parse_args()
+    t0 = time.time()
+    np.random.seed(SEED)
+    cfg = load_config(a.config)
+    out = ROOT / "artifacts" / cfg["name"]
+    out.mkdir(parents=True, exist_ok=True)
+
+    df, part, X, states, b = load_dataset(cfg["blocks"])
+    feats = feature_list(cfg)
+    model, cal, params, p_va, va, fit_sec = fit_predict(cfg, feats, df, part, X, eval_part="valid")
+    res, _ = score_split(cfg, p_va, df, va, params)
+    print(f"valid: экономия {res['savings']:,.2f} у.е., доля потолка {res['savings'] / res['ceiling']:.1%}")
+
+    (out / "model.pkl").write_bytes(pickle.dumps(model))
+    (out / "calibrator.pkl").write_bytes(pickle.dumps(cal))
+    (out / "states.pkl").write_bytes(pickle.dumps(states))
+    # История операций без меток: у знакомых карт в score.py признаки продолжаются «с того же места».
+    df.drop(columns=["is_fraud"]).to_parquet(out / "history.parquet", index=False)
+    meta = {
+        "config": cfg, "features": feats, "policy_params": params,
+        "split": {k: str(v) for k, v in b.items()},
+        "block_constants": {"a": {"ALPHA": get_block("a").ALPHA, "K_AMT": get_block("a").K_AMT},
+                            "b": {"SESSION_GAP_H": get_block("b").SESSION_GAP_H, "M_RATE": get_block("b").M_RATE},
+                            "c": {"DELAY_DAYS": get_block("c").DELAY_DAYS, "M_SMOOTH": get_block("c").M_SMOOTH}},
+        "best_iteration": getattr(model, "best_iteration", None), "seed": SEED,
+        "valid_savings": res["savings"], "python": platform.python_version(),
+        "libs": {p: version(p) for p in ["numpy", "pandas", "scikit-learn", "lightgbm", "pyarrow"]},
+    }
+    (out / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+    print(f"Артефакты: {out}  ({time.time() - t0:.0f} c)")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,1 +1,61 @@
-<!DOCTYPE html><html><head><title>Google Drive - Virus scan warning</title><meta http-equiv="content-type" content="text/html; charset=utf-8"/><style nonce="Z8FQ7TidzOTL-mD7tPRWNw">.goog-link-button{position:relative;color:#15c;text-decoration:underline;cursor:pointer}.goog-link-button-disabled{color:#ccc;text-decoration:none;cursor:default}body{color:#222;font:normal 13px/1.4 arial,sans-serif;margin:0}.grecaptcha-badge{visibility:hidden}.uc-main{padding-top:50px;text-align:center}#uc-dl-icon{display:inline-block;margin-top:16px;padding-right:1em;vertical-align:top}#uc-text{display:inline-block;max-width:68ex;text-align:left}.uc-error-caption,.uc-warning-caption{color:#222;font-size:16px}#uc-download-link{text-decoration:none}.uc-name-size a{color:#15c;text-decoration:none}.uc-name-size a:visited{color:#61c;text-decoration:none}.uc-name-size a:active{color:#d14836;text-decoration:none}.uc-footer{color:#777;font-size:11px;padding-bottom:5ex;padding-top:5ex;text-align:center}.uc-footer a{color:#15c}.uc-footer a:visited{color:#61c}.uc-footer a:active{color:#d14836}.uc-footer-divider{color:#ccc;width:100%}.goog-inline-block{position:relative;display:-moz-inline-box;display:inline-block}* html .goog-inline-block{display:inline}:first-child+html .goog-inline-block{display:inline}sentinel{}</style><link rel="icon" href="//ssl.gstatic.com/docs/doclist/images/drive_favicon_2026_32dp.png"/></head><body><div class="uc-main"><div id="uc-dl-icon" class="image-container"><div class="drive-sprite-aux-download-file"></div></div><div id="uc-text"><p class="uc-warning-caption">Google Drive can't scan this file for viruses.</p><p class="uc-warning-subcaption">This file is executable and may harm your computer. <p class="uc-warning-subcaption"><span class="uc-name-size"><a href="/open?id=1wtZJt8O5qjbfjLsRTZCQa6ckSk32EAe_">scenarios.py</a> (3.7k)</span></p></p><form id="download-form" action="https://drive.usercontent.google.com/download" method="get"><input type="submit" id="uc-download-link" class="goog-inline-block jfk-button jfk-button-action" value="Download anyway"/><input type="hidden" name="id" value="1wtZJt8O5qjbfjLsRTZCQa6ckSk32EAe_"><input type="hidden" name="export" value="download"><input type="hidden" name="confirm" value="t"><input type="hidden" name="uuid" value="d3278fc5-6f80-4c9f-a6c4-4f7a49e42fbb"></form></div></div><div class="uc-footer"><hr class="uc-footer-divider"></div></body></html>
+"""Кто какой сценарий ловит: первая операция серии мошенничества против продолжения серии.
+
+Серия — фрод-операции одной карты. «Первая» — фрод, перед которым у карты не было фрода 7 дней.
+Метки здесь используются только для разбора результатов на valid, не в признаках.
+
+python -m experiments.scenarios  ->  reports/scenarios.md
+"""
+import numpy as np
+import pandas as pd
+
+from src.data import ROOT
+from src.evaluate import DEFAULTS, feature_list, run
+from src.pipeline import load_dataset
+from experiments.tournament import C_TREE_REJECTED, REJECTED
+
+
+def cfg_of(name, blocks, **kw):
+    return {**DEFAULTS, "name": name, "author": "team", "blocks": blocks, "calibration": "isotonic",
+            "policy": "ev_cap", **kw}
+
+
+def fs(blocks, drop=()):
+    return [c for c in feature_list(cfg_of("x", blocks)) if c not in REJECTED and c not in set(drop)]
+
+
+df, part, X, states, b = load_dataset(["base", "a", "b", "c"])
+va = (part == "valid").to_numpy()
+d = df.loc[va, ["cc_num", "ts", "amt", "is_fraud"]].copy()
+# Первая операция серии: у карты не было фрода за предыдущие 7 дней (по всему файлу, включая train).
+f = df.loc[df.is_fraud == 1, ["cc_num", "ts"]].sort_values(["cc_num", "ts"])
+f["prev"] = f.groupby("cc_num")["ts"].shift(1)
+first_idx = f.index[(f["prev"].isna()) | ((f["ts"] - f["prev"]) > pd.Timedelta(days=7))]
+d["сценарий"] = np.where(d.is_fraud == 0, "честная", "продолжение серии")
+d.loc[d.index.isin(first_idx) & (d.is_fraud == 1), "сценарий"] = "первая операция серии"
+
+variants = {
+    "база": (["base"], fs(["base"]), {}),
+    "A: профиль (LightGBM)": (["base", "a"], fs(["base", "a"]), {}),
+    "B: ритм (LightGBM монотонный)": (["base", "b"], fs(["base", "b"]), {"monotone": True}),
+    "финал: A+B+C5, учит деньгам": (["base", "a", "b", "c"], fs(["base", "a", "b", "c"], C_TREE_REJECTED),
+                                    {"sample_weight": "cost"}),
+    "финал + монотонность": (["base", "a", "b", "c"], fs(["base", "a", "b", "c"], C_TREE_REJECTED),
+                             {"sample_weight": "cost", "monotone": True}),
+}
+rows = []
+for name, (blocks, feats, kw) in variants.items():
+    res = run(cfg_of(f"S|{name}", blocks, **kw), feats, df, part, X, "valid", note="сценарии")
+    d["dec"] = res["decision"]
+    for sc in ["первая операция серии", "продолжение серии"]:
+        m = d["сценарий"] == sc
+        rows.append({"вариант": name, "сценарий": sc, "фродов": int(m.sum()),
+                     "сумма фрода, у.е.": round(float(d.loc[m, "amt"].sum()), 2),
+                     "поймано, шт": int(d.loc[m, "dec"].sum()),
+                     "поймано, у.е.": round(float(d.loc[m & (d.dec == 1), "amt"].sum()), 2),
+                     "доля денег": round(float(d.loc[m & (d.dec == 1), "amt"].sum() / d.loc[m, "amt"].sum()), 4)})
+    rows.append({"вариант": name, "сценарий": "ложные отправки (честные)", "фродов": "",
+                 "поймано, шт": int(((d["сценарий"] == "честная") & (d.dec == 1)).sum())})
+t = pd.DataFrame(rows)
+(ROOT / "reports" / "scenarios.md").write_text("# Кто какой сценарий ловит (valid)\n\n" + t.to_markdown(index=False),
+                                               encoding="utf-8")
+print(t.to_string())

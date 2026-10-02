@@ -1,1 +1,39 @@
-<!DOCTYPE html><html><head><title>Google Drive - Virus scan warning</title><meta http-equiv="content-type" content="text/html; charset=utf-8"/><style nonce="4f6aPdQfXFR5ugDXQItxnw">.goog-link-button{position:relative;color:#15c;text-decoration:underline;cursor:pointer}.goog-link-button-disabled{color:#ccc;text-decoration:none;cursor:default}body{color:#222;font:normal 13px/1.4 arial,sans-serif;margin:0}.grecaptcha-badge{visibility:hidden}.uc-main{padding-top:50px;text-align:center}#uc-dl-icon{display:inline-block;margin-top:16px;padding-right:1em;vertical-align:top}#uc-text{display:inline-block;max-width:68ex;text-align:left}.uc-error-caption,.uc-warning-caption{color:#222;font-size:16px}#uc-download-link{text-decoration:none}.uc-name-size a{color:#15c;text-decoration:none}.uc-name-size a:visited{color:#61c;text-decoration:none}.uc-name-size a:active{color:#d14836;text-decoration:none}.uc-footer{color:#777;font-size:11px;padding-bottom:5ex;padding-top:5ex;text-align:center}.uc-footer a{color:#15c}.uc-footer a:visited{color:#61c}.uc-footer a:active{color:#d14836}.uc-footer-divider{color:#ccc;width:100%}.goog-inline-block{position:relative;display:-moz-inline-box;display:inline-block}* html .goog-inline-block{display:inline}:first-child+html .goog-inline-block{display:inline}sentinel{}</style><link rel="icon" href="//ssl.gstatic.com/docs/doclist/images/drive_favicon_2026_32dp.png"/></head><body><div class="uc-main"><div id="uc-dl-icon" class="image-container"><div class="drive-sprite-aux-download-file"></div></div><div id="uc-text"><p class="uc-warning-caption">Google Drive can't scan this file for viruses.</p><p class="uc-warning-subcaption">This file is executable and may harm your computer. <p class="uc-warning-subcaption"><span class="uc-name-size"><a href="/open?id=1YgiaIwMq-9A7zu_kuRAoYgMXwoM24Wvz">test_leak_canary.py</a> (1.9k)</span></p></p><form id="download-form" action="https://drive.usercontent.google.com/download" method="get"><input type="submit" id="uc-download-link" class="goog-inline-block jfk-button jfk-button-action" value="Download anyway"/><input type="hidden" name="id" value="1YgiaIwMq-9A7zu_kuRAoYgMXwoM24Wvz"><input type="hidden" name="export" value="download"><input type="hidden" name="confirm" value="t"><input type="hidden" name="uuid" value="838b2c26-f960-471f-8a6c-393391997d61"></form></div></div><div class="uc-footer"><hr class="uc-footer-divider"></div></body></html>
+"""Проверка самого теста: заведомо «подглядывающие» признаки он обязан поймать.
+
+python -m tests.test_leak_canary
+"""
+import numpy as np
+import pandas as pd
+
+from src.data import load_train
+from tests.test_no_future_leak import compare
+
+
+def leaky(df):
+    out = pd.DataFrame(index=df.index)
+    # Сколько всего операций у карты за весь период — знает будущее.
+    out["card_total_cnt"] = df.groupby("cc_num")["amt"].transform("size").astype("float64")
+    # Пауза до СЛЕДУЮЩЕЙ операции карты — знает будущее.
+    out["gap_to_next_h"] = (df.groupby("cc_num")["ts"].shift(-1) - df["ts"]).dt.total_seconds() / 3600
+    # Честный признак для контроля: пауза с ПРЕДЫДУЩЕЙ операции.
+    out["gap_from_prev_h"] = (df["ts"] - df.groupby("cc_num")["ts"].shift(1)).dt.total_seconds() / 3600
+    return out
+
+
+def main():
+    df = load_train()
+    cards = np.random.default_rng(7).choice(df.cc_num.unique(), size=100, replace=False)
+    sub = df[df.cc_num.isin(cards)].reset_index(drop=True)
+    T = sub.ts.quantile(0.5)
+    full, cut = leaky(sub), leaky(sub[sub.ts <= T])
+    for f in full.columns:
+        ok, _ = compare(cut[f], full.loc[sub.ts <= T, f])
+        print(f"{f}: {'прошёл' if ok else 'ПОЙМАН как утечка'}")
+    assert not compare(cut["card_total_cnt"], full.loc[sub.ts <= T, "card_total_cnt"])[0]
+    assert not compare(cut["gap_to_next_h"], full.loc[sub.ts <= T, "gap_to_next_h"])[0]
+    assert compare(cut["gap_from_prev_h"], full.loc[sub.ts <= T, "gap_from_prev_h"])[0]
+    print("Тест на утечку работает: подглядывающие признаки пойманы, честный — пропущен.")
+
+
+if __name__ == "__main__":
+    main()

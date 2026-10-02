@@ -1,1 +1,98 @@
-<!DOCTYPE html><html><head><title>Google Drive - Virus scan warning</title><meta http-equiv="content-type" content="text/html; charset=utf-8"/><style nonce="nzjttNS3BlP_wsRckPq4BQ">.goog-link-button{position:relative;color:#15c;text-decoration:underline;cursor:pointer}.goog-link-button-disabled{color:#ccc;text-decoration:none;cursor:default}body{color:#222;font:normal 13px/1.4 arial,sans-serif;margin:0}.grecaptcha-badge{visibility:hidden}.uc-main{padding-top:50px;text-align:center}#uc-dl-icon{display:inline-block;margin-top:16px;padding-right:1em;vertical-align:top}#uc-text{display:inline-block;max-width:68ex;text-align:left}.uc-error-caption,.uc-warning-caption{color:#222;font-size:16px}#uc-download-link{text-decoration:none}.uc-name-size a{color:#15c;text-decoration:none}.uc-name-size a:visited{color:#61c;text-decoration:none}.uc-name-size a:active{color:#d14836;text-decoration:none}.uc-footer{color:#777;font-size:11px;padding-bottom:5ex;padding-top:5ex;text-align:center}.uc-footer a{color:#15c}.uc-footer a:visited{color:#61c}.uc-footer a:active{color:#d14836}.uc-footer-divider{color:#ccc;width:100%}.goog-inline-block{position:relative;display:-moz-inline-box;display:inline-block}* html .goog-inline-block{display:inline}:first-child+html .goog-inline-block{display:inline}sentinel{}</style><link rel="icon" href="//ssl.gstatic.com/docs/doclist/images/drive_favicon_2026_32dp.png"/></head><body><div class="uc-main"><div id="uc-dl-icon" class="image-container"><div class="drive-sprite-aux-download-file"></div></div><div id="uc-text"><p class="uc-warning-caption">Google Drive can't scan this file for viruses.</p><p class="uc-warning-subcaption">This file is executable and may harm your computer. <p class="uc-warning-subcaption"><span class="uc-name-size"><a href="/open?id=1mgXHOJbsfZ5It7V_0uib3J0YfCzX6Xgv">score.py</a> (4.4k)</span></p></p><form id="download-form" action="https://drive.usercontent.google.com/download" method="get"><input type="submit" id="uc-download-link" class="goog-inline-block jfk-button jfk-button-action" value="Download anyway"/><input type="hidden" name="id" value="1mgXHOJbsfZ5It7V_0uib3J0YfCzX6Xgv"><input type="hidden" name="export" value="download"><input type="hidden" name="confirm" value="t"><input type="hidden" name="uuid" value="24a38844-a56b-444a-bb2b-c29fbfcb03b7"></form></div></div><div class="uc-footer"><hr class="uc-footer-divider"></div></body></html>
+"""Скоринг новых операций (CLAUDE.md, раздел 12). Ничего не обучает и не ходит в сеть.
+
+python score.py --input <входной_csv> --output <выходной_csv> [--artifacts artifacts/final]
+
+Выход: trans_num, fraud_probability, decision (0/1), reason_1..3 (причины только при decision = 1).
+"""
+import argparse
+import json
+import pickle
+import time
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from src.data import ROOT, clean, READ_DTYPES
+from src.economics import decide
+from src.pipeline import compute
+from src.reasons import top_reasons
+
+
+def load_artifacts(path: Path):
+    return {
+        "model": pickle.loads((path / "model.pkl").read_bytes()),
+        "cal": pickle.loads((path / "calibrator.pkl").read_bytes()),
+        "states": pickle.loads((path / "states.pkl").read_bytes()),
+        "meta": json.loads((path / "meta.json").read_text(encoding="utf-8")),
+        "history": path / "history.parquet",
+    }
+
+
+def score_frame(raw: pd.DataFrame, art: dict, with_reasons: bool = True) -> pd.DataFrame:
+    meta = art["meta"]
+    cfg = meta["config"]
+    raw = raw.drop(columns=[c for c in ["is_fraud"] if c in raw.columns])   # метки на входе не используем никогда
+    new = clean(raw)
+    if new["ts"].isna().any():   # непарсящаяся дата не должна ронять скоринг
+        new["ts"] = new["ts"].fillna(new["ts"].dropna().max() if new["ts"].notna().any() else pd.Timestamp("2020-06-22"))
+    new["_input"] = True
+
+    hist = pd.read_parquet(art["history"])
+    hist = hist[~hist["trans_num"].isin(set(new["trans_num"]))]
+    hist = hist[hist["ts"] <= new["ts"].max()]          # будущее относительно входа не нужно
+    hist["_input"] = False
+    df = pd.concat([hist, new], ignore_index=True)
+    df = df.sort_values(["ts", "trans_num"], kind="mergesort").reset_index(drop=True)
+
+    X = compute(df, cfg["blocks"], art["states"])
+    inp = df["_input"].to_numpy()
+    Xi = X.loc[inp, meta["features"]]
+    p = art["cal"].transform(art["model"].predict_proba(Xi))
+    di = df.loc[inp]
+    day = di["ts"].dt.normalize()
+    decision = decide(cfg["policy"], day, p, di["amt"].to_numpy(dtype="float64"), params=meta["policy_params"])
+
+    out = pd.DataFrame({"trans_num": di["trans_num"].to_numpy(), "fraud_probability": np.round(p, 6),
+                        "decision": decision.astype(int)}, index=di.index)
+    for k in range(1, 4):
+        out[f"reason_{k}"] = ""
+    flagged = out.index[out["decision"] == 1]
+    if with_reasons and len(flagged):
+        contrib = art["model"].contributions(X.loc[flagged, meta["features"]])
+        rows = pd.concat([di.loc[flagged, ["amt"]], X.loc[flagged].drop(columns=["amt", "category"], errors="ignore")],
+                         axis=1)
+        rows["category"] = di.loc[flagged, "category"].astype("str")
+        rows["hour"] = di.loc[flagged, "ts"].dt.hour
+        rows["minute"] = di.loc[flagged, "ts"].dt.minute
+        out.loc[flagged, ["reason_1", "reason_2", "reason_3"]] = top_reasons(contrib, rows).to_numpy()
+    # Порядок строк — как во входном файле.
+    order = pd.Series(np.arange(len(raw)), index=raw["trans_num"].astype("str").to_numpy())
+    return out.assign(_o=out["trans_num"].map(order)).sort_values("_o").drop(columns="_o").reset_index(drop=True)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--input", required=True)
+    ap.add_argument("--output", required=True)
+    ap.add_argument("--artifacts", default=str(ROOT / "artifacts" / "final"))
+    a = ap.parse_args()
+    t0 = time.time()
+    art = load_artifacts(Path(a.artifacts))
+    raw = pd.read_csv(a.input, dtype={k: v for k, v in READ_DTYPES.items()}, low_memory=False)
+    out = score_frame(raw, art)
+    out.to_csv(a.output, index=False, encoding="utf-8")
+    try:
+        import psutil
+
+        mem = psutil.Process().memory_info().peak_wset / 2**30 if hasattr(psutil.Process().memory_info(), "peak_wset") \
+            else psutil.Process().memory_info().rss / 2**30
+        mem_s = f", пик памяти {mem:.2f} ГБ"
+    except Exception:
+        mem_s = ""
+    print(f"Готово: {len(out)} операций, отправлено аналитикам {int(out['decision'].sum())}, "
+          f"{time.time() - t0:.1f} c{mem_s} -> {a.output}")
+
+
+if __name__ == "__main__":
+    main()

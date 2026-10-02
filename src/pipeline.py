@@ -1,1 +1,71 @@
-<!DOCTYPE html><html><head><title>Google Drive - Virus scan warning</title><meta http-equiv="content-type" content="text/html; charset=utf-8"/><style nonce="j58ghgK49JSJk6hyPr6aHg">.goog-link-button{position:relative;color:#15c;text-decoration:underline;cursor:pointer}.goog-link-button-disabled{color:#ccc;text-decoration:none;cursor:default}body{color:#222;font:normal 13px/1.4 arial,sans-serif;margin:0}.grecaptcha-badge{visibility:hidden}.uc-main{padding-top:50px;text-align:center}#uc-dl-icon{display:inline-block;margin-top:16px;padding-right:1em;vertical-align:top}#uc-text{display:inline-block;max-width:68ex;text-align:left}.uc-error-caption,.uc-warning-caption{color:#222;font-size:16px}#uc-download-link{text-decoration:none}.uc-name-size a{color:#15c;text-decoration:none}.uc-name-size a:visited{color:#61c;text-decoration:none}.uc-name-size a:active{color:#d14836;text-decoration:none}.uc-footer{color:#777;font-size:11px;padding-bottom:5ex;padding-top:5ex;text-align:center}.uc-footer a{color:#15c}.uc-footer a:visited{color:#61c}.uc-footer a:active{color:#d14836}.uc-footer-divider{color:#ccc;width:100%}.goog-inline-block{position:relative;display:-moz-inline-box;display:inline-block}* html .goog-inline-block{display:inline}:first-child+html .goog-inline-block{display:inline}sentinel{}</style><link rel="icon" href="//ssl.gstatic.com/docs/doclist/images/drive_favicon_2026_32dp.png"/></head><body><div class="uc-main"><div id="uc-dl-icon" class="image-container"><div class="drive-sprite-aux-download-file"></div></div><div id="uc-text"><p class="uc-warning-caption">Google Drive can't scan this file for viruses.</p><p class="uc-warning-subcaption">This file is executable and may harm your computer. <p class="uc-warning-subcaption"><span class="uc-name-size"><a href="/open?id=1Rein1NsjtooUQqMu_2i-9BnV44xXey4s">pipeline.py</a> (2.8k)</span></p></p><form id="download-form" action="https://drive.usercontent.google.com/download" method="get"><input type="submit" id="uc-download-link" class="goog-inline-block jfk-button jfk-button-action" value="Download anyway"/><input type="hidden" name="id" value="1Rein1NsjtooUQqMu_2i-9BnV44xXey4s"><input type="hidden" name="export" value="download"><input type="hidden" name="confirm" value="t"><input type="hidden" name="uuid" value="7ef6479e-0c64-42a7-b463-ada11fd4c486"></form></div></div><div class="uc-footer"><hr class="uc-footer-divider"></div></body></html>
+"""Сборка признаков из блоков. Один и тот же код в evaluate, train и score."""
+import hashlib
+import pickle
+import time
+from pathlib import Path
+
+import pandas as pd
+
+from src.data import CACHE_DIR, ROOT, load_train
+from src.features import BLOCK_MODULES, get_block
+from src.split import assign, boundaries
+
+
+def fit_states(train_rows: pd.DataFrame, blocks: list[str]) -> dict:
+    return {b: get_block(b).fit(train_rows) for b in blocks}
+
+
+def compute(df: pd.DataFrame, blocks: list[str], states: dict) -> pd.DataFrame:
+    """df отсортирован по (ts, trans_num). Возвращает признаки всех блоков с тем же индексом."""
+    parts = []
+    for b in blocks:
+        t0 = time.time()
+        parts.append(get_block(b).transform(df, states[b]))
+        print(f"  блок {b}: {time.time() - t0:.1f} c")
+    return pd.concat(parts, axis=1)
+
+
+def _code_hash(block: str) -> str:
+    """Кэш признаков сбрасывается, если изменился код блока или очистки данных."""
+    files = [ROOT / (BLOCK_MODULES[block].replace(".", "/") + ".py"), ROOT / "src" / "data.py",
+             ROOT / "src" / "split.py"]
+    h = hashlib.sha1()
+    for f in files:
+        h.update(Path(f).read_bytes())
+    return h.hexdigest()[:12]
+
+
+def load_dataset(blocks: list[str]):
+    """Весь fraudTrain: очищенные строки, часть (train/valid/holdout), признаки блоков, состояния блоков.
+
+    Состояния (популяционные статистики) обучаются только на части train.
+    """
+    df = load_train()
+    b = boundaries(df.ts)
+    part = assign(df.ts, b)
+    train_rows = df[part == "train"]
+    feats, states = [], {}
+    for blk in blocks:
+        key = _code_hash(blk)
+        fpath = CACHE_DIR / f"feat_{blk}_{key}.parquet"
+        spath = CACHE_DIR / f"state_{blk}_{key}.pkl"
+        if fpath.exists() and spath.exists():
+            f = pd.read_parquet(fpath)
+            st = pickle.loads(spath.read_bytes())
+        else:
+            for old in CACHE_DIR.glob(f"feat_{blk}_*.parquet"):
+                old.unlink()
+            for old in CACHE_DIR.glob(f"state_{blk}_*.pkl"):
+                old.unlink()
+            t0 = time.time()
+            st = get_block(blk).fit(train_rows)
+            f = get_block(blk).transform(df, st)
+            print(f"  блок {blk}: признаки посчитаны за {time.time() - t0:.1f} c")
+            f.to_parquet(fpath)
+            spath.write_bytes(pickle.dumps(st))
+        if "category" in f.columns:
+            f["category"] = pd.Categorical(f["category"], categories=st["categories"])
+        feats.append(f)
+        states[blk] = st
+    X = pd.concat(feats, axis=1)
+    return df, part, X, states, b
