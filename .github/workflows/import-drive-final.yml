@@ -1,0 +1,52 @@
+name: Import Drive project final
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  import-drive-final:
+    if: ${{ !contains(github.event.head_commit.message || '', 'Import antifraud project from Drive') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Prepare downloader and closed asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          awk '
+            /cat > import_drive_project\.mjs\.b64 <<\047EOF\047/ { grab=1; next }
+            grab && /^          EOF$/ { grab=0; next }
+            grab { sub(/^          /, ""); print }
+          ' .github/workflows/import-drive.yml > import_drive_project.mjs.b64
+          base64 -d import_drive_project.mjs.b64 > import_drive_project.mjs
+          mkdir -p docs/fig
+          cat .github/import-assets/scenarios.png.b64.* | base64 -d > docs/fig/scenarios.png
+          sed -i '/docs\/fig\/scenarios\.png/d' import_drive_project.mjs
+      - name: Download listed Drive files
+        run: node import_drive_project.mjs
+      - name: Commit imported project
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f import_drive_project.mjs import_drive_project.mjs.b64
+          rm -rf .github/import-assets
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git status --short
+          if git diff --cached --quiet; then
+            echo 'No changes to commit'
+            exit 0
+          fi
+          git commit -m 'Import antifraud project from Drive'
+          git push
