@@ -5,7 +5,7 @@
      битая дата — не падает, вероятности в [0, 1];
   4. нагрузка: 0,55 млн строк через командную строку — время и пиковая память.
 
-python -m tests.test_score_robustness [--skip-load]
+python -m tests.test_score_robustness [--skip-load] [--artifacts artifacts/final_v2]
 """
 import argparse
 import subprocess
@@ -37,9 +37,10 @@ def check(name, ok, extra=""):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-load", action="store_true")
+    ap.add_argument("--artifacts", default=str(ART), help="по умолчанию v1 (artifacts/final); v2 — artifacts/final_v2")
     a = ap.parse_args()
     TMP.mkdir(parents=True, exist_ok=True)
-    art = load_artifacts(ART)
+    art = load_artifacts(ROOT / a.artifacts)
     raw = raw_train()
     ts = pd.to_datetime(raw["trans_date_trans_time"])
     ho = raw[ts >= boundaries(ts)["holdout_start"]].copy()
@@ -49,7 +50,7 @@ def main():
     t0 = time.time()
     shuffled = ho.sample(frac=1.0, random_state=1).drop(columns="is_fraud")
     out_s = score_frame(shuffled, art)
-    ref = pd.read_parquet(ROOT / "reports" / "preds" / "final_holdout.parquet")
+    ref = pd.read_parquet(ROOT / "reports" / "preds" / f"{art['meta']['config']['name']}_holdout.parquet")
     m = out_s.merge(ref, on="trans_num")
     diff = float(np.abs(m["fraud_probability"] - m["p"]).max())
     results.append(check("вероятности score.py = evaluate на холдауте", len(m) == len(ho) and diff < 1e-6,

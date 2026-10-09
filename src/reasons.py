@@ -71,6 +71,13 @@ def _reason(f: str, r: dict):
         return ("b_rank", "Сумма больше, чем в каждой из 10 последних операций клиента")
     if f == "b_online_streak" and r.get(f, 0) >= 3:
         return ("b_streak", f"{int(r[f])} онлайн-покупок подряд")
+    # Блок E (неделя 2): признаки эпизода захвата карты.
+    if f == "e_h_since_big" and r.get(f, 1e9) < 12 and amt >= 100:
+        when = f"{max(r[f] * 60, 1):.0f} мин" if r[f] < 1 else f"{r[f]:.0f} ч"
+        return ("e_big", f"Крупная операция по карте уже была {when} назад")
+    if f in ("e_usual_ratio", "e_usual_48h") and r.get("e_usual_ratio", 1) < 0.6 and r.get("e_info_usual_exp", 0) >= 2:
+        return ("e_usual", f"За двое суток пропали обычные повседневные покупки клиента "
+                           f"(обычно около {r['e_info_usual_exp']:.0f}, сейчас {r.get('e_usual_48h', 0):.0f})")
     return None
 
 

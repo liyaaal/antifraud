@@ -1,6 +1,12 @@
 """Скоринг новых операций (CLAUDE.md, раздел 12). Ничего не обучает и не ходит в сеть.
 
-python score.py --input <входной_csv> --output <выходной_csv> [--artifacts artifacts/final]
+python score.py --input <входной_csv> --output <выходной_csv> [--artifacts artifacts/final_v2]
+
+В консоль печатается сводка по группам риска (высокий / средний / низкий, src/risk.py); если во входе
+есть is_fraud — ещё сверка с ответами (метки в расчёте не участвуют). Колонки выходного файла прежние.
+
+По умолчанию — текущая версия v2 (неделя 2). Версия v1 (неделя 1): --artifacts artifacts/final
+или код по тегу v1-week1 (см. README).
 
 Выход: trans_num, fraud_probability, decision (0/1), reason_1..3 (причины только при decision = 1).
 """
@@ -17,6 +23,7 @@ from src.data import ROOT, clean, READ_DTYPES
 from src.economics import decide
 from src.pipeline import compute
 from src.reasons import top_reasons
+from src.risk import risk_level, summary_text
 
 
 def load_artifacts(path: Path):
@@ -25,7 +32,9 @@ def load_artifacts(path: Path):
         "cal": pickle.loads((path / "calibrator.pkl").read_bytes()),
         "states": pickle.loads((path / "states.pkl").read_bytes()),
         "meta": json.loads((path / "meta.json").read_text(encoding="utf-8")),
-        "history": path / "history.parquet",
+        # История у v1 и v2 одна и та же (операции fraudTrain без меток); если в папке версии её нет — берём из final.
+        "history": path / "history.parquet" if (path / "history.parquet").exists()
+        else ROOT / "artifacts" / "final" / "history.parquet",
     }
 
 
@@ -75,7 +84,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True)
     ap.add_argument("--output", required=True)
-    ap.add_argument("--artifacts", default=str(ROOT / "artifacts" / "final"))
+    ap.add_argument("--artifacts", default=str(ROOT / "artifacts" / "final_v2"))
+    ap.add_argument("--risk-report", default=None,
+                    help="необязательно: отдельный файл trans_num, risk_level (основной выход не меняется)")
     a = ap.parse_args()
     t0 = time.time()
     art = load_artifacts(Path(a.artifacts))
@@ -92,6 +103,12 @@ def main():
         mem_s = ""
     print(f"Готово: {len(out)} операций, отправлено аналитикам {int(out['decision'].sum())}, "
           f"{time.time() - t0:.1f} c{mem_s} -> {a.output}")
+    ts = pd.to_datetime(raw["trans_date_trans_time"], errors="coerce")
+    print(summary_text(out, raw, ts))
+    if a.risk_report:
+        pd.DataFrame({"trans_num": out["trans_num"], "risk_level": risk_level(out["fraud_probability"])}) \
+            .to_csv(a.risk_report, index=False, encoding="utf-8")
+        print(f"Группы риска по операциям -> {a.risk_report}")
 
 
 if __name__ == "__main__":

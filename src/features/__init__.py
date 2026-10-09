@@ -6,6 +6,7 @@ BLOCK_MODULES = {
     "a": "src.features.profile",
     "b": "src.features.velocity",
     "c": "src.features.context",
+    "e": "src.features.episode",
 }
 
 

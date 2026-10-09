@@ -1,0 +1,14 @@
+name: final_v2
+# Неделя 2: финал v1 + блок E «эпизод захвата карты» (reports/week2/3_error_analysis.md).
+# Признаки E добавлялись по одному на valid (reports/experiments.csv, note «неделя 2»). Оставлены три, прямо
+# описывающие паттерн: «крупная операция была недавно» и «обычные покупки владельца пропали».
+blocks: [base, a, b, c, e]
+exclude: [a_new_merchant, a_geo_km, a_amt_down, b_cnt_24h_window, b_sess_cat_n,
+          c_risk_cat_hour, c_risk_cat_amtbin, c_risk_age_cat, c_risk_merchant,
+          e_big_48h, e_night_48h, e_amt_48h_log, e_cats_48h, e_big_rate_hist]
+model: lgbm
+monotone: false
+sample_weight: cost
+calibration: isotonic
+policy: ev_cap
+author: team-week2

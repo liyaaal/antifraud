@@ -1,0 +1,104 @@
+{
+ "config": {
+  "features": null,
+  "exclude": [
+   "a_new_merchant",
+   "a_geo_km",
+   "a_amt_down",
+   "b_cnt_24h_window",
+   "b_sess_cat_n",
+   "c_risk_cat_hour",
+   "c_risk_cat_amtbin",
+   "c_risk_age_cat",
+   "c_risk_merchant",
+   "e_big_48h",
+   "e_night_48h",
+   "e_amt_48h_log",
+   "e_cats_48h",
+   "e_big_rate_hist"
+  ],
+  "model": "lgbm",
+  "model_params": {},
+  "monotone": false,
+  "sample_weight": "cost",
+  "calibration": "isotonic",
+  "policy": "ev_cap",
+  "author": "team-week2",
+  "name": "final_v2",
+  "blocks": [
+   "base",
+   "a",
+   "b",
+   "c",
+   "e"
+  ]
+ },
+ "features": [
+  "amt",
+  "log_amt",
+  "category",
+  "hour",
+  "dow",
+  "is_night",
+  "is_online",
+  "age",
+  "gender_m",
+  "log_city_pop",
+  "a_cat_bits",
+  "a_time_bits",
+  "a_amt_z",
+  "a_amt_up",
+  "a_surprise_total",
+  "a_cat_x_amt",
+  "a_time_x_amt",
+  "a_profile_log_n",
+  "a_drift",
+  "b_gap_log_h",
+  "b_is_first",
+  "b_int_1h",
+  "b_int_24h",
+  "b_amt_int_24h",
+  "b_act_ratio",
+  "b_sess_pos",
+  "b_sess_cum_amt",
+  "b_sess_escalation",
+  "b_sess_night_share",
+  "b_amt_rank10",
+  "b_online_streak",
+  "c_amt_pct_cat",
+  "e_h_since_big",
+  "e_usual_48h",
+  "e_usual_ratio"
+ ],
+ "policy_params": {},
+ "split": {
+  "valid_start": "2020-02-21 00:00:00",
+  "holdout_start": "2020-04-22 00:00:00",
+  "last_day": "2020-06-21 00:00:00"
+ },
+ "block_constants": {
+  "a": {
+   "ALPHA": 20.0,
+   "K_AMT": 10.0
+  },
+  "b": {
+   "SESSION_GAP_H": 3.0,
+   "M_RATE": 7.0
+  },
+  "c": {
+   "DELAY_DAYS": 30,
+   "M_SMOOTH": 200.0
+  }
+ },
+ "best_iteration": 612,
+ "seed": 42,
+ "valid_savings": 253305.6197795868,
+ "python": "3.13.15",
+ "libs": {
+  "numpy": "2.5.3",
+  "pandas": "3.0.6",
+  "scikit-learn": "1.9.1",
+  "lightgbm": "4.7.0",
+  "pyarrow": "25.0.1"
+ }
+}

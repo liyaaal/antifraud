@@ -1,0 +1,13 @@
+name: final_v2_e5
+# Неделя 2: финал v1 + блок E «эпизод захвата карты» (reports/week2/3_error_analysis.md).
+# Вариант с 5 признаками E (отклонён: на valid не лучше компактного в пределах шума, см. decision_log).
+blocks: [base, a, b, c, e]
+exclude: [a_new_merchant, a_geo_km, a_amt_down, b_cnt_24h_window, b_sess_cat_n,
+          c_risk_cat_hour, c_risk_cat_amtbin, c_risk_age_cat, c_risk_merchant,
+          e_big_48h, e_night_48h, e_amt_48h_log]
+model: lgbm
+monotone: false
+sample_weight: cost
+calibration: isotonic
+policy: ev_cap
+author: team-week2
