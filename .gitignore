@@ -7,6 +7,8 @@ __pycache__/
 .ruff_cache/
 
 data/*.csv
+!data/holdout.csv
+logs/
 data/cache/
 
 .env
