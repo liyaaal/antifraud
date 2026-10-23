@@ -1,0 +1,76 @@
+name: antifraud
+
+x-app: &app
+  build: .
+  image: antifraud:local
+  init: true
+
+x-health: &health
+  interval: 10s
+  timeout: 5s
+  retries: 6
+  start_period: 90s
+
+services:
+  api:
+    <<: *app
+    restart: unless-stopped
+    # Card history and threshold live in one process: do not add workers/replicas.
+    command: [python, -m, uvicorn, service.main:app, --host, 0.0.0.0, --port, "8000", --workers, "1"]
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8000}:8000"
+    volumes:
+      - ./artifacts:/app/artifacts:ro
+      - ./data:/app/data:ro
+      - journal:/app/logs
+    healthcheck:
+      <<: *health
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+
+  frontend:
+    <<: *app
+    restart: unless-stopped
+    command: [python, -m, streamlit, run, frontend/app.py, --server.address, 0.0.0.0, --server.port, "8501", --server.headless, "true"]
+    environment:
+      ANTIFRAUD_API: http://api:8000
+      ANTIFRAUD_PUBLIC_API: "http://localhost:${API_PORT:-8000}"
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-8501}:8501"
+    volumes:
+      - ./data:/app/data:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      <<: *health
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=3)"]
+
+  dashboard:
+    <<: *app
+    restart: unless-stopped
+    command: [python, -m, streamlit, run, dashboard/app.py, --server.address, 0.0.0.0, --server.port, "8502", --server.headless, "true"]
+    environment:
+      ANTIFRAUD_API: http://api:8000
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${DASHBOARD_PORT:-8502}:8502"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      <<: *health
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8502/_stcore/health', timeout=3)"]
+
+  # Explicit commands only: preparation, training, scoring, replay and research.
+  # The source mount preserves generated data, models, reports and presentations.
+  tools:
+    <<: *app
+    profiles: [tools]
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    environment:
+      ANTIFRAUD_API: http://api:8000
+    volumes:
+      - .:/app
+    command: [python, --version]
+
+volumes:
+  journal:

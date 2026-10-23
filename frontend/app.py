@@ -16,6 +16,7 @@ import requests
 import streamlit as st
 
 API = os.environ.get("ANTIFRAUD_API", "http://localhost:8000")
+PUBLIC_API = os.environ.get("ANTIFRAUD_PUBLIC_API", API)
 ROOT = Path(__file__).resolve().parents[1]
 HOLDOUT = ROOT / "data" / "holdout.csv"
 CATEGORIES = ["entertainment", "food_dining", "gas_transport", "grocery_net", "grocery_pos", "health_fitness",
@@ -90,7 +91,7 @@ with st.sidebar:
         st.caption(f"История карт: {h['history_rows']:,} операций до {h['history_end']}".replace(",", " "))
     else:
         st.error(h.get("detail", "сервис недоступен"))
-    st.caption(f"API: {API} · [документация /docs]({API}/docs)")
+    st.caption(f"API: {PUBLIC_API} · [документация /docs]({PUBLIC_API}/docs)")
 
     st.subheader("Порог (дополнительно)")
     thr = st.slider("Порог решения «фрод»", 0.05, 0.99, float(h.get("threshold", 0.5)) if code == 200 else 0.5, 0.01)
@@ -238,7 +239,7 @@ with tab2:
 with tab3:
     st.markdown("Сервис должен отклонить некорректный вход кодом **422** и записать запрос в журнал как ошибку — "
                 "тогда success rate на панели снизится. То же самое можно показать на странице "
-                f"[{API}/docs]({API}/docs).")
+                f"[{PUBLIC_API}/docs]({PUBLIC_API}/docs).")
     good = row_payload(hold.iloc[0])
     cases = {
         "Сумма текстом (amt = «сто»)": {**good, "amt": "сто"},

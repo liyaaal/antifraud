@@ -6,6 +6,7 @@ python replay.py --n 150 --start 0 --pause 0.1
 """
 import argparse
 import json
+import os
 import time
 
 import pandas as pd
@@ -16,7 +17,7 @@ from service.prepare import HOLDOUT_CSV
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--api", default="http://localhost:8000")
+    ap.add_argument("--api", default=os.environ.get("ANTIFRAUD_API", "http://localhost:8000"))
     ap.add_argument("--n", type=int, default=150)
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--pause", type=float, default=0.1)
