@@ -1,8 +1,5 @@
 FROM python:3.13-slim-bookworm
 
-# Official uv binary, pinned for reproducible dependency installation tooling.
-COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /usr/local/bin/uv
-
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -18,7 +15,10 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY requirements.txt ./
-RUN uv pip install --system --no-cache -r requirements.txt
+# Optional package mirror for environments with limited access to PyPI.
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG PIP_TRUSTED_HOST=""
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY --chown=app:app . .
 RUN mkdir -p data artifacts logs reports \
