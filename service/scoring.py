@@ -50,7 +50,7 @@ class OnlineScorer:
         self.lock = threading.Lock()
         self.load_seconds = round(time.time() - t0, 1)
 
-    def score(self, raw: dict) -> dict:
+    def score(self, raw: dict, update: bool = True) -> dict:
         """raw — строка датасета Sparkov (без is_fraud). Возвращает вероятность, EV, группу риска и причины."""
         frame = pd.DataFrame([raw])
         new = clean(frame)
@@ -82,16 +82,8 @@ class OnlineScorer:
             rows["minute"] = row["ts"].minute
             reasons = [r for r in top_reasons(contrib, rows).iloc[0].tolist() if r]
 
-            # операция становится историей своей карты
-            keep = self.hist.get(cc)
-            add = new.drop(columns=[c for c in ["is_fraud"] if c in new.columns])
-            if keep is None:
-                self.hist[cc] = add.reset_index(drop=True)
-            else:
-                keep = keep[keep["trans_num"] != row["trans_num"]]
-                self.hist[cc] = pd.concat([keep, add], ignore_index=True).sort_values(
-                    ["ts", "trans_num"], kind="mergesort").reset_index(drop=True)
-            self.session_rows += 1
+            if update:
+                self._append(cc, new, row["trans_num"])
         return {
             "p": round(p, 6),
             "ev": round(float(expected_value(p, float(row["amt"]))), 2),
@@ -102,4 +94,35 @@ class OnlineScorer:
             "amt": float(row["amt"]),
             "category": str(row["category"]),
             "op_time": str(row["ts"]),
+            "_new": new,          # очищенная строка — чтобы дописать её в историю после записи в базу
         }
+
+    def _append(self, cc: int, new, trans_num: str) -> None:
+        keep = self.hist.get(cc)
+        add = new.drop(columns=[c for c in ["is_fraud"] if c in new.columns])
+        if keep is None:
+            self.hist[cc] = add.reset_index(drop=True)
+        else:
+            keep = keep[keep["trans_num"] != trans_num]
+            self.hist[cc] = pd.concat([keep, add], ignore_index=True).sort_values(
+                ["ts", "trans_num"], kind="mergesort").reset_index(drop=True)
+        self.session_rows += 1
+
+    def extend_history(self, raws: list[dict]) -> None:
+        """Дописать в историю много операций сразу (восстановление из базы при старте)."""
+        new = clean(pd.DataFrame(raws))
+        new = new.drop(columns=[c for c in ["is_fraud"] if c in new.columns])
+        with self.lock:
+            for cc, g in new.groupby("cc_num", sort=False):
+                keep = self.hist.get(int(cc))
+                if keep is not None:
+                    keep = keep[~keep["trans_num"].isin(set(g["trans_num"]))]
+                    g = pd.concat([keep, g], ignore_index=True)
+                self.hist[int(cc)] = g.sort_values(["ts", "trans_num"], kind="mergesort").reset_index(drop=True)
+            self.session_rows += len(new)
+
+    def add_history(self, result: dict) -> None:
+        """Дописать оценённую операцию в историю карты (вызывается после успешной записи в базу)."""
+        new = result["_new"]
+        with self.lock:
+            self._append(int(new["cc_num"].iloc[0]), new, str(new["trans_num"].iloc[0]))

@@ -14,3 +14,7 @@ data/cache/
 .env
 .DS_Store
 Thumbs.db
+
+# неделя 5: пароль базы и резервные копии
+.env
+backups/

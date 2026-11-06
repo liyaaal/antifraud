@@ -1,0 +1,17 @@
+# Минимальные зависимости для Docker-образа недели 3 (сервис + интерфейс + панель).
+# Версии ML-библиотек — те же, что в requirements.txt: иначе модель и калибратор из .pkl не загрузятся.
+numpy==2.5.3
+pandas==3.0.6
+pyarrow==25.0.1
+scipy==1.18.1
+scikit-learn==1.9.1
+lightgbm==4.7.0
+PyYAML==6.0.3
+fastapi>=0.115
+uvicorn>=0.30
+pydantic>=2.7
+streamlit>=1.40
+requests>=2.31
+# неделя 5: PostgreSQL
+sqlalchemy>=2.0
+psycopg[binary]>=3.2

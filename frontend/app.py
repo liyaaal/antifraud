@@ -16,6 +16,8 @@ import requests
 import streamlit as st
 
 API = os.environ.get("ANTIFRAUD_API", "http://localhost:8000")
+# Адрес сервиса для ссылок в браузере (в Docker сервис внутри сети называется service, а браузер ходит на localhost)
+API_PUBLIC = os.environ.get("ANTIFRAUD_API_PUBLIC", API)
 ROOT = Path(__file__).resolve().parents[1]
 HOLDOUT = ROOT / "data" / "holdout.csv"
 CATEGORIES = ["entertainment", "food_dining", "gas_transport", "grocery_net", "grocery_pos", "health_fitness",
@@ -85,21 +87,20 @@ def truth_box(pred: int, label: int):
 with st.sidebar:
     st.header("Сервис")
     code, h = call("GET", "/health")
-    if code == 200:
-        st.success(f"Работает · модель {h['model']} · порог {h['threshold']}")
+    if code == 200 and h.get("db") == "down":
+        st.warning("Сервис работает, но **база данных недоступна**: операции сейчас не оцениваются (503).")
+    elif code == 200:
+        st.success(f"Работает · модель {h['model']} · порог {h['threshold']} · база PostgreSQL доступна")
         st.caption(f"История карт: {h['history_rows']:,} операций до {h['history_end']}".replace(",", " "))
     else:
         st.error(h.get("detail", "сервис недоступен"))
-    st.caption(f"API: {API} · [документация /docs]({API}/docs)")
+    st.caption(f"API: {API_PUBLIC} · [документация /docs]({API_PUBLIC}/docs)")
 
     st.subheader("Порог (дополнительно)")
     thr = st.slider("Порог решения «фрод»", 0.05, 0.99, float(h.get("threshold", 0.5)) if code == 200 else 0.5, 0.01)
     if st.button("Применить порог"):
         c, b = call("PUT", "/threshold", json={"threshold": thr})
         st.toast(f"Порог: {b.get('old_threshold')} → {b.get('threshold')}" if c == 200 else str(b))
-    if st.button("Новая сессия показателей"):
-        c, b = call("POST", "/session/new")
-        st.toast("Панель начнёт счёт заново" if c == 200 else str(b))
 
 hold = load_holdout()
 n_hold = len(hold)
@@ -183,6 +184,9 @@ with tab1:
                 st.info("Поля изменены — фактическая метка к этой операции уже не относится и в /label не отправлена.")
             with st.expander("Ответ сервиса (JSON)"):
                 st.json(res)
+        elif code == 503:
+            st.error("База данных недоступна — сервис не может записать решение в журнал, поэтому операция "
+                     "не оценена. Повторите, когда база вернётся (HTTP 503).")
         else:
             st.error(f"HTTP {code}: сервис отклонил запрос")
             st.json(res)
@@ -225,6 +229,9 @@ with tab2:
                                     "решение": "фрод" if pred else "не фрод", "факт": "фрод" if y else "честная"})
             else:
                 cnt["ошибок"] += 1
+                if code == 503:
+                    st.error("База данных недоступна (HTTP 503) — серия остановлена.")
+                    break
             bar.progress((k + 1) / len(rows), f"{k + 1} из {len(rows)}")
             stats.dataframe(pd.DataFrame([cnt]), hide_index=True)
             if flagged:
@@ -238,7 +245,7 @@ with tab2:
 with tab3:
     st.markdown("Сервис должен отклонить некорректный вход кодом **422** и записать запрос в журнал как ошибку — "
                 "тогда success rate на панели снизится. То же самое можно показать на странице "
-                f"[{API}/docs]({API}/docs).")
+                f"[{API_PUBLIC}/docs]({API_PUBLIC}/docs).")
     good = row_payload(hold.iloc[0])
     cases = {
         "Сумма текстом (amt = «сто»)": {**good, "amt": "сто"},

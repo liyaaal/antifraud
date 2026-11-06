@@ -12,6 +12,8 @@ import requests
 import streamlit as st
 
 API = os.environ.get("ANTIFRAUD_API", "http://localhost:8000")
+# Адрес сервиса для ссылок в браузере (в Docker сервис внутри сети называется service, а браузер ходит на localhost)
+API_PUBLIC = os.environ.get("ANTIFRAUD_API_PUBLIC", API)
 
 st.set_page_config(page_title="Антифрод — мониторинг", page_icon="📈", layout="wide")
 st.title("Антифрод — панель мониторинга")
@@ -19,9 +21,11 @@ st.title("Антифрод — панель мониторинга")
 with st.sidebar:
     st.header("Настройки")
     every = st.select_slider("Обновлять каждые, с", [2, 3, 5, 10], value=5)
+    win_label = st.radio("Окно наблюдения", ["последние 5 минут", "последний час", "всё время"], index=2)
+    window = {"последние 5 минут": "5m", "последний час": "1h", "всё время": "all"}[win_label]
     axis = st.radio("График по", ["каждым N запросам", "минутам"])
     bucket = st.select_slider("N запросов в точке", [10, 20, 25, 50, 100], value=25)
-    st.caption(f"Источник: {API}/metrics")
+    st.caption(f"Источник: {API_PUBLIC}/metrics")
     st.markdown(
         "**Определения**\n\n"
         "- **Success rate** — доля запросов к /predict без ошибки (422 или 500) от всех запросов. "
@@ -70,18 +74,25 @@ def line(df: pd.DataFrame, cols: dict, title: str, fmt=".1%"):
 @st.fragment(run_every=f"{every}s")
 def live():
     try:
-        r = requests.get(f"{API}/metrics", params={"bucket": bucket}, timeout=10)
+        r = requests.get(f"{API}/metrics", params={"bucket": bucket, "window": window}, timeout=10)
+        if r.status_code == 503:
+            st.error("База данных недоступна: показатели считаются по PostgreSQL и сейчас не обновляются. "
+                     "Как только база вернётся, панель продолжит работу сама.")
+            return
         r.raise_for_status()
         m = r.json()
     except requests.RequestException as e:
         st.error(f"Сервис недоступен: {e}")
         return
     s = m["summary"]
-    st.caption(f"Сессия {m['session']} · начата {m['session_started']} · порог {s['threshold']} · "
+    st.caption(f"Данные из PostgreSQL · окно: {win_label} · порог {s['threshold']} · "
                f"обновлено автоматически каждые {every} с")
+    st.info(f"Всего в базе: **{num(s['total_transactions_in_db'])}** операций, "
+            f"**{num(s['total_labels_in_db'])}** меток, **{num(s['total_requests_in_db'])}** запросов в журнале — "
+            "не обнуляется при перезапуске контейнеров.")
 
     c = st.columns(4)
-    tile(c[0], "Запросов", num(s["requests"]), help="с начала сессии")
+    tile(c[0], "Запросов к /predict", num(s["requests"]), help="в выбранном окне наблюдения")
     tile(c[1], "Success rate", pct(s["success_rate"]), f"ошибок {s['errors']} (422: {s['errors_422']}, 500: {s['errors_500']})")
     tile(c[2], "Fraud rate, модель", pct(s["fraud_rate_model"], 2), f"{s['flagged']} операций помечено")
     tile(c[3], "Fraud rate, факт", pct(s["fraud_rate_fact"], 2), f"{s['fraud_fact']} фрода по {s['labeled']} меткам")

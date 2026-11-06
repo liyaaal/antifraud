@@ -1,0 +1,98 @@
+# Антифрод — неделя 5: четыре контейнера + PostgreSQL для журнала.
+#   cp .env.example .env            (один раз; в .env — свой пароль, файл не попадает в git)
+#   docker compose up -d --build    запуск
+#   docker compose ps               статус: у db должно быть healthy
+#   docker compose down             остановка — данные в томе pgdata СОХРАНЯЮТСЯ
+#   docker compose down -v          остановка и УДАЛЕНИЕ тома: все данные базы пропадут
+#
+# Адреса: сервис http://localhost:8000/docs · интерфейс :8501 · панель :8502 · Adminer :8080
+# База с компьютера (DBeaver, psql): localhost:5433, пользователь и пароль из .env, база antifraud
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: antifraud
+    volumes:
+      - pgdata:/var/lib/postgresql/data                         # файлы базы — в именованном томе
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro    # схема: выполняется при ПУСТОМ томе
+      - ./backups:/backups                                       # резервные копии pg_dump
+    ports:
+      - "5433:5432"             # только для отладки с компьютера; 5433 — чтобы не мешать локальному Postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d antifraud"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: .
+    image: antifraud-week5
+    command: ["uvicorn", "service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/antifraud   # db — имя контейнера, не localhost
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data        # holdout.csv и data/cache/service_history.parquet
+    depends_on:
+      db:
+        condition: service_healthy   # ждём не запуска контейнера, а готовности базы (pg_isready)
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  frontend:
+    build: .
+    image: antifraud-week5
+    command: ["streamlit", "run", "frontend/app.py", "--server.port", "8501", "--server.address", "0.0.0.0", "--server.headless", "true"]
+    environment:
+      ANTIFRAUD_API: http://backend:8000          # адрес сервиса внутри сети Docker
+      ANTIFRAUD_API_PUBLIC: http://localhost:8000 # адрес для ссылок в браузере
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  dashboard:
+    build: .
+    image: antifraud-week5
+    command: ["streamlit", "run", "dashboard/app.py", "--server.port", "8502", "--server.address", "0.0.0.0", "--server.headless", "true"]
+    environment:
+      ANTIFRAUD_API: http://backend:8000
+      ANTIFRAUD_API_PUBLIC: http://localhost:8000
+    ports:
+      - "8502:8502"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  adminer:                      # дополнительно: просмотр базы в браузере http://localhost:8080
+    image: adminer:4
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  prepare:                      # подготовка holdout и истории карт — вручную, один раз
+    build: .
+    image: antifraud-week5
+    profiles: ["prepare"]
+    command: ["python", "-m", "service.prepare"]
+    volumes:
+      - ./data:/app/data
+      - ../data:/data:ro        # папка с fraudTest.csv рядом с проектом (Documents\antifraud\data)
+
+volumes:
+  pgdata:                       # не удаляется при docker compose down
