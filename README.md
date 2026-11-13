@@ -1,4 +1,4 @@
-# 🛡️ Антифрод в реальном времени (+ PostgreSQL)
+# 🛡️ Антифрод в реальном времени (+ PostgreSQL + Airflow)
 
 **Проект курса «Инженерия признаков»** · датасет Sparkov (операции по картам) · команда: A, B, C
 
@@ -12,6 +12,7 @@
 | **3** | сервис FastAPI + интерфейс оператора + панель мониторинга | ответ ≈ **0,2 с**, сервис = `score.py` (расхождение **0**) |
 | **4** | Docker: вся система одной командой | `docker compose up --build` |
 | **5** | PostgreSQL: журнал, решения и метки в базе | данные переживают перезапуск контейнеров |
+| **6** | пакетный прескоринг в Airflow и бизнес-отчёт Ollama | DAG сохраняет скоринг и проверенный отчёт в PostgreSQL |
 
 ## Быстрый старт (неделя 5, Docker + PostgreSQL)
 
@@ -20,7 +21,42 @@ copy .env.example .env
 docker compose up -d --build
 ```
 
-Сервис http://localhost:8000/docs · интерфейс http://localhost:8501 · панель http://localhost:8502 · Adminer http://localhost:8080. Подробно — раздел «Неделя 5» ниже.
+Сервис http://localhost:8000/docs · интерфейс http://localhost:8501 · панель http://localhost:8502 · Adminer http://localhost:8081 · Airflow http://localhost:8083. Подробно — разделы «Неделя 5» и «Неделя 6» ниже.
+
+## Неделя 6 — прескоринг на Airflow
+
+Добавлены Airflow и Ollama. DAG `prescoring` загружает `data/holdout.csv` в PostgreSQL (колонки датасета Sparkov: `trans_num`, `is_fraud`, `amt` и признаки), вызывает существующий `score.py`/`score_frame` без передачи меток в модель, сохраняет результаты в `scored_transactions`, рассчитывает финансовые показатели SQL-запросом и пишет текст Ollama с проверкой каждого числа в `business_reports`.
+
+Образ Airflow использует Python 3.13 и версии NumPy, pandas, scikit-learn, LightGBM и PyArrow из `artifacts/final_v2/meta.json`, чтобы артефакты модели соответствовали среде обучения. Отдельный scalar-порог в модели `final_v2` не используется: решения формируются политикой `ev_cap`, поэтому в `scored_transactions.threshold` сохраняется `NULL`.
+
+1. Положите отложенный CSV преподавателя в `data/holdout.csv`. Он не должен содержать повторяющиеся `trans_num`.
+2. Запустите из корня репозитория:
+
+   ```powershell
+   docker compose up -d --build
+   docker compose exec ollama ollama pull qwen2.5:3b
+   ```
+
+3. Откройте Airflow: [http://localhost:8083](http://localhost:8083). Пользователь `admin`; пароль можно получить так:
+
+   ```powershell
+   docker compose exec airflow cat /opt/airflow/standalone_admin_password.txt
+   ```
+
+4. В Airflow включите DAG `prescoring` и нажмите Trigger. DAG выполняет задачи `create_tables → load_holdout → extract → score → load → summarize → build_facts → generate_report → check_report`.
+5. Посмотрите результаты в Adminer [http://localhost:8081](http://localhost:8081), база `antifraud`, схема `public`:
+
+   ```sql
+   SELECT * FROM prescoring_runs ORDER BY started_at DESC LIMIT 5;
+   SELECT run_id, llm_model, check_passed, unexpected_numbers, report_text
+   FROM business_reports ORDER BY created_at DESC LIMIT 5;
+   SELECT count(*) FROM holdout_transactions;
+   SELECT count(*) FROM scored_transactions;
+   ```
+
+`load` удаляет старые результаты только для `final_v2` перед записью нового запуска; поэтому повторный запуск не создаёт дубликаты. Таблицы создаются DAG-ом через `airflow/dags/sql/tables.sql`, в том числе если PostgreSQL-том был создан раньше. Ollama хранит загруженную модель в томе `ollama_data`. Airflow доступен на порту 8083, поскольку 8080 занят Eclipse Ditto, а Adminer остаётся на 8081.
+
+Финансовые допущения собраны в `ASSUMPTIONS` внутри DAG: ручная проверка — 2 USD за сигнал, упущенная комиссия — 1,5% от суммы ложных блокировок. Это учебные значения; замените их на согласованные с командой и объясните в защите. Языковая модель только формулирует текст и не считает показатели. Отчёт сохраняется даже при неуспешной проверке, а задача `check_report` подсвечивается ошибкой и пишет лишние числа в `unexpected_numbers`.
 
 ## Быстрый старт (неделя 3)
 
@@ -95,7 +131,7 @@ docker compose down -v               # остановка и удаление т
 | http://localhost:8000/docs | сервис, маршруты |
 | http://localhost:8501 | интерфейс оператора |
 | http://localhost:8502 | панель мониторинга |
-| http://localhost:8080 | Adminer: система PostgreSQL, сервер `db`, пользователь и пароль из `.env`, база `antifraud` |
+| http://localhost:8081 | Adminer: система PostgreSQL, сервер `db`, пользователь и пароль из `.env`, база `antifraud` |
 | localhost:5433 | база для DBeaver / psql с компьютера (5433 — чтобы не конфликтовать с локальным Postgres) |
 
 `psql` внутри контейнера: `docker compose exec db psql -U antifraud -d antifraud` (или `psql_db.bat`).
@@ -158,7 +194,7 @@ WHERE is_fraud_pred = 1 AND amount > 500 AND received_at > now() - interval '10 
 
 ### Дополнительно
 
-- **Adminer** — контейнер для просмотра базы в браузере (:8080).
+- **Adminer** — контейнер для просмотра базы в браузере (:8081).
 - **История карт для признаков переживает перезапуск**: при старте backend дописывает к стартовой истории все операции из `transactions.payload`, поэтому признаки «по истории карты» после перезапуска считаются так же, как до него.
 - **Индексы и EXPLAIN.** На 300 000 строк в `request_log` запрос success rate за 5 минут: с индексом `request_log (ts)` — *Index Scan*, **0,19 мс**; без индексов — *Parallel Seq Scan*, **23,7 мс** (в 120 раз дольше). Проверка: последний запрос в `db/queries.sql`.
 - **Резервная копия:** `backup_db.bat` → `docker compose exec db pg_dump -U antifraud -d antifraud -Fc -f /backups/antifraud.dump` (файл в папке `backups/`); восстановление — `restore_db.bat` → `pg_restore --clean --if-exists`.
