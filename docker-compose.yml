@@ -1,11 +1,13 @@
-# Антифрод — неделя 5: четыре контейнера + PostgreSQL для журнала.
-#   cp .env.example .env            (один раз; в .env — свой пароль, файл не попадает в git)
+# Антифрод — неделя 6: онлайн-контур (db, backend, frontend, dashboard) + прескоринг (airflow, ollama) + adminer.
+#   cp .env.example .env            (один раз; в .env — свои пароли, файл не попадает в git)
 #   docker compose up -d --build    запуск
-#   docker compose ps               статус: у db должно быть healthy
-#   docker compose down             остановка — данные в томе pgdata СОХРАНЯЮТСЯ
-#   docker compose down -v          остановка и УДАЛЕНИЕ тома: все данные базы пропадут
+#   docker compose exec ollama ollama pull qwen2.5:3b     модель для отчёта (однократно, ~2 ГБ)
+#   docker compose ps               статус: у db, backend, airflow должно быть healthy
+#   docker compose down             остановка — данные в томах pgdata, ollama, airflow_db СОХРАНЯЮТСЯ
+#   docker compose down -v          остановка и УДАЛЕНИЕ томов: все данные базы пропадут
 #
-# Адреса: сервис http://localhost:8000/docs · интерфейс :8501 · панель :8502 · Adminer :8081 · Airflow :8083
+# Адреса: сервис http://localhost:8000/docs · интерфейс :8501 · панель :8502
+#         Airflow http://localhost:8080 (admin / пароль из .env) · Adminer :8081
 # База с компьютера (DBeaver, psql): localhost:5433, пользователь и пароль из .env, база antifraud
 
 services:
@@ -29,7 +31,7 @@ services:
 
   backend:
     build: .
-    image: antifraud-week5
+    image: antifraud-week6
     command: ["uvicorn", "service.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/antifraud   # db — имя контейнера, не localhost
@@ -49,7 +51,7 @@ services:
 
   frontend:
     build: .
-    image: antifraud-week5
+    image: antifraud-week6
     command: ["streamlit", "run", "frontend/app.py", "--server.port", "8501", "--server.address", "0.0.0.0", "--server.headless", "true"]
     environment:
       ANTIFRAUD_API: http://backend:8000          # адрес сервиса внутри сети Docker
@@ -64,7 +66,7 @@ services:
 
   dashboard:
     build: .
-    image: antifraud-week5
+    image: antifraud-week6
     command: ["streamlit", "run", "dashboard/app.py", "--server.port", "8502", "--server.address", "0.0.0.0", "--server.headless", "true"]
     environment:
       ANTIFRAUD_API: http://backend:8000
@@ -75,62 +77,71 @@ services:
       backend:
         condition: service_healthy
 
+  airflow:                      # неделя 6: оркестратор, DAG prescoring (пакетный скоринг + бизнес-отчёт)
+    build: ./airflow
+    image: antifraud-airflow
+    command: standalone           # планировщик + веб-сервер + служебная база в одном контейнере
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "15"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/db/airflow.db   # история запусков — в томе
+      # подключение antifraud_db для PostgresHook (Airflow Connection из переменной окружения)
+      AIRFLOW_CONN_ANTIFRAUD_DB: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/antifraud
+      OLLAMA_URL: http://ollama:11434                   # ollama — имя контейнера, не localhost
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:3b}
+      # пользователь веб-интерфейса создаётся при старте
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags                       # DAG и SQL-схема
+      - ./airflow/tools:/opt/airflow/tools:ro                  # запуск DAG из терминала, анализ LLM
+      - ./score.py:/opt/airflow/model/score.py:ro              # пакетный скоринг недель 1–2 (функция score_df)
+      - ./src:/opt/airflow/model/src:ro                        # тот же код признаков
+      - ./artifacts:/opt/airflow/model/artifacts:ro            # обученные модели v2 (final_v2) и v1 (final)
+      - ./data:/opt/airflow/data                               # holdout.csv и история карт data/cache
+      - airflow_db:/opt/airflow/db
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  ollama:                       # неделя 6: компактная языковая модель для текста отчёта
+    image: ollama/ollama
+    volumes:
+      - ollama:/root/.ollama    # скачанные модели сохраняются между перезапусками
+    ports:
+      - "11434:11434"           # только для отладки с компьютера
+
   adminer:                      # дополнительно: просмотр базы в браузере http://localhost:8081
     image: adminer:4
     environment:
       ADMINER_DEFAULT_SERVER: db
     ports:
-      - "8081:8080"
+      - "8081:8080"             # 8080 теперь занят Airflow
     depends_on:
       db:
         condition: service_healthy
 
   prepare:                      # подготовка holdout и истории карт — вручную, один раз
     build: .
-    image: antifraud-week5
+    image: antifraud-week6
     profiles: ["prepare"]
     command: ["python", "-m", "service.prepare"]
     volumes:
       - ./data:/app/data
       - ../data:/data:ro        # папка с fraudTest.csv рядом с проектом (Documents\antifraud\data)
 
-  airflow:
-    build: ./airflow
-    command: standalone
-    environment:
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
-      POSTGRES_HOST: db
-      POSTGRES_PORT: "5432"
-      POSTGRES_DB: antifraud
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      OLLAMA_URL: http://ollama:11434
-      LLM_MODEL: qwen2.5:3b
-      AIRFLOW_UID: "50000"
-    ports:
-      - "8083:8080"           # 8080 занят Eclipse Ditto, Adminer остаётся на 8081
-    volumes:
-      - ./airflow/dags:/opt/airflow/dags
-      - ./artifacts:/opt/airflow/model/artifacts:ro
-      - ./src:/opt/airflow/model/src:ro
-      - ./score.py:/opt/airflow/model/score.py:ro
-      - ./data:/opt/airflow/data
-      - airflow_data:/opt/airflow/data/tmp
-    depends_on:
-      db:
-        condition: service_healthy
-      ollama:
-        condition: service_started
-
-  ollama:
-    image: ollama/ollama:latest
-    volumes:
-      - ollama_data:/root/.ollama
-    # Модель загружается вручную один раз: docker compose exec ollama ollama pull qwen2.5:3b
-
 volumes:
   pgdata:                       # не удаляется при docker compose down
-  airflow_data:
-  ollama_data:
+  ollama:                       # модели Ollama
+  airflow_db:                   # служебная база Airflow (история запусков DAG)

@@ -145,4 +145,36 @@ def live():
                "фактический — только после проверки.")
 
 
+def prescoring_report():
+    """Неделя 6: последний отчёт DAG prescoring из GET /reports/latest (не обновляется каждые N секунд)."""
+    st.divider()
+    st.subheader("Прескоринг (Airflow): последний бизнес-отчёт")
+    try:
+        r = requests.get(f"{API}/reports/latest", timeout=10)
+    except requests.RequestException as e:
+        st.caption(f"Сервис недоступен: {e}")
+        return
+    if r.status_code == 404:
+        st.caption("Отчётов пока нет — запустите DAG prescoring в Airflow (http://localhost:8080).")
+        return
+    if r.status_code != 200:
+        st.caption(f"Отчёт недоступен (HTTP {r.status_code}).")
+        return
+    rep = r.json()
+    c = st.columns(4)
+    tile(c[0], "Предотвращено, USD", num(rep["tp_sum"]), "пойманный фрод")
+    tile(c[1], "Пропущено, USD", num(rep["fn_sum"]), "понесённые потери")
+    tile(c[2], "Чистый эффект, USD", num(rep["net_effect"]), "после затрат на проверку")
+    tile(c[3], "Покрытие фрода", "—" if rep["coverage_pct"] is None else f"{rep['coverage_pct']:.1f}%".replace(".", ","),
+         f"модель {rep['model_version']}, порог {rep['threshold']}")
+    ok = rep["check_passed"]
+    (st.success if ok else st.warning)(
+        ("Проверка чисел пройдена" if ok else f"Проверка чисел НЕ пройдена: {', '.join(rep['extra_numbers'] or [])}")
+        + f" · {rep['llm_model']} · попыток: {rep['attempts']} · запуск {rep['run_id']}")
+    st.markdown(rep["report_text"])
+    with st.expander("Входные показатели (facts) и допущения"):
+        st.json({"facts": rep["facts"], "assumptions": rep["assumptions"], "compare": rep["compare"]})
+
+
 live()
+prescoring_report()

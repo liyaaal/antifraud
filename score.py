@@ -80,6 +80,25 @@ def score_frame(raw: pd.DataFrame, art: dict, with_reasons: bool = True) -> pd.D
     return out.assign(_o=out["trans_num"].map(order)).sort_values("_o").drop(columns="_o").reset_index(drop=True)
 
 
+def score_df(df: pd.DataFrame, artifacts: str | Path | None = None, history: str | Path | None = None) -> pd.DataFrame:
+    """Пакетный скоринг для Airflow (неделя 6): тот же код признаков и модели, что в CLI ниже.
+
+    df — сырые поля датасета (is_fraud, если есть, отбрасывается внутри score_frame).
+    history — история карт до начала выборки; по умолчанию data/cache/service_history.parquet
+    (fraudTrain + fraudTest до начала holdout), если её нет — история обучения из артефактов.
+    Возвращает transaction_id (= trans_num) и fraud_score — откалиброванную вероятность.
+    """
+    art = load_artifacts(Path(artifacts) if artifacts else ROOT / "artifacts" / "final_v2")
+    hist = Path(history) if history else ROOT / "data" / "cache" / "service_history.parquet"
+    if hist.exists():
+        art["history"] = hist
+    raw = df.copy()
+    raw["trans_num"] = raw["trans_num"].astype("str")
+    out = score_frame(raw, art, with_reasons=False)
+    return pd.DataFrame({"transaction_id": out["trans_num"].astype("str"),
+                         "fraud_score": out["fraud_probability"].astype("float64")})
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True)
