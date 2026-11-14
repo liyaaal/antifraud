@@ -46,7 +46,8 @@ def params() -> dict:
     """Параметры запуска. Значения по умолчанию — в коде; переопределяются в Admin → Variables."""
     return {
         "model_version": Variable.get("model_version", default_var="v2"),
-        "compare_model": Variable.get("compare_model", default_var="v1"),   # "" — без сравнения
+        # Сравнение — дополнительная часть. В архиве может отсутствовать модель v1.
+        "compare_model": Variable.get("compare_model", default_var=""),
         "threshold": float(Variable.get("threshold", default_var=0.5)),     # рабочая точка недели 2
         "llm_model": Variable.get("llm_model", default_var=os.environ.get("LLM_MODEL", "qwen2.5:3b")),
         "llm_attempts": int(Variable.get("llm_attempts", default_var=3)),
