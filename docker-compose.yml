@@ -50,7 +50,6 @@ services:
       start_period: 30s
 
   frontend:
-    build: .
     image: antifraud-week6
     command: ["streamlit", "run", "frontend/app.py", "--server.port", "8501", "--server.address", "0.0.0.0", "--server.headless", "true"]
     environment:
@@ -65,7 +64,6 @@ services:
         condition: service_healthy
 
   dashboard:
-    build: .
     image: antifraud-week6
     command: ["streamlit", "run", "dashboard/app.py", "--server.port", "8502", "--server.address", "0.0.0.0", "--server.headless", "true"]
     environment:
