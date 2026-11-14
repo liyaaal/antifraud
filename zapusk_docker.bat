@@ -24,7 +24,7 @@ echo.
 echo Servis:    http://localhost:8000/docs
 echo Interfeis: http://localhost:8501
 echo Panel:     http://localhost:8502   (vnizu - poslednii otchet preskoringa)
-echo Airflow:   http://localhost:8080   (polzovatel admin, parol AIRFLOW_ADMIN_PASSWORD iz .env, po umolchaniyu admin)
+echo Airflow:   http://localhost:8083   (polzovatel admin, parol AIRFLOW_ADMIN_PASSWORD iz .env, po umolchaniyu admin)
 echo Adminer:   http://localhost:8081   (PostgreSQL, server db, polzovatel i parol iz .env, baza antifraud)
 echo Zapustit DAG bez brauzera: zapusk_dag.bat
 echo Ostanovit: docker compose down   (dannye sohranyatsya)

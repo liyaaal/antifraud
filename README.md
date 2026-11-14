@@ -72,7 +72,7 @@ flowchart TB
     AD["🔍 Adminer :8081"]
   end
   subgraph batch["Прескоринг · неделя 6"]
-    AF["🌀 airflow :8080<br/>DAG prescoring<br/>score.py · модели v2 и v1"]
+    AF["🌀 airflow :8083 → 8080<br/>DAG prescoring<br/>score.py · модели v2 и v1"]
     LLM["🦙 ollama<br/>qwen2.5:3b"]
   end
   BE["⚙️ backend · FastAPI :8000<br/>LightGBM v2 + история карт<br/>/predict · /label · /metrics · /health"]
@@ -110,7 +110,7 @@ docker compose ps                             # db, backend, airflow — (health
 | http://localhost:8501 | интерфейс оператора |
 | http://localhost:8502 | панель мониторинга |
 | http://localhost:8000/docs | API сервиса (Swagger) |
-| http://localhost:8080 | Airflow: пользователь `admin`, пароль `AIRFLOW_ADMIN_PASSWORD` из `.env` (по умолчанию `admin`) |
+| http://localhost:8083 | Airflow: пользователь `admin`, пароль `AIRFLOW_ADMIN_PASSWORD` из `.env` (по умолчанию `admin`) |
 | http://localhost:8081 | Adminer: PostgreSQL, сервер `db`, логин и пароль из `.env`, база `antifraud` |
 
 > [!NOTE]

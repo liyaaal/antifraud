@@ -155,7 +155,7 @@ def prescoring_report():
         st.caption(f"Сервис недоступен: {e}")
         return
     if r.status_code == 404:
-        st.caption("Отчётов пока нет — запустите DAG prescoring в Airflow (http://localhost:8080).")
+        st.caption("Отчётов пока нет — запустите DAG prescoring в Airflow (http://localhost:8083).")
         return
     if r.status_code != 200:
         st.caption(f"Отчёт недоступен (HTTP {r.status_code}).")
@@ -178,3 +178,4 @@ def prescoring_report():
 
 live()
 prescoring_report()
+
