@@ -264,3 +264,27 @@ def compute_metrics(window: str = "all", bucket: int = 25, threshold: float = 0.
         "recent_errors": [{"time": x["ts"].astimezone().strftime("%H:%M:%S"), "http_code": x["status_code"],
                            "error": x["error"]} for x in errors],
     }
+
+
+# ---------------------------------------------------------------- неделя 6: отчёт прескоринга
+def latest_report() -> dict | None:
+    """Последний бизнес-отчёт DAG prescoring (Airflow) вместе с записью о запуске. None — отчётов ещё нет."""
+    def go():
+        with engine().connect() as c:
+            exists = c.execute(text("SELECT to_regclass('public.business_reports') IS NOT NULL")).scalar()
+            if not exists:
+                return None
+            row = c.execute(text("""
+                SELECT b.run_id, b.created_at, b.llm_model, b.facts, b.report_text, b.check_passed,
+                       b.extra_numbers, b.attempts, r.model_version, r.threshold, r.rows_scored, r.flagged,
+                       r.tp_sum, r.fn_sum, r.fp_sum, r.net_effect, r.coverage_pct, r.assumptions, r.compare
+                FROM business_reports b LEFT JOIN prescoring_runs r ON r.run_id = b.run_id
+                ORDER BY b.created_at DESC LIMIT 1""")).mappings().first()
+            if row is None:
+                return None
+            d = dict(row)
+            d["created_at"] = d["created_at"].isoformat()
+            for k in ("threshold", "tp_sum", "fn_sum", "fp_sum", "net_effect", "coverage_pct"):
+                d[k] = None if d[k] is None else float(d[k])
+            return d
+    return _run(go)

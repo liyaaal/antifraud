@@ -235,6 +235,17 @@ def metrics(request: Request, window: Literal["5m", "1h", "all"] = "all", bucket
         raise db_down(request, e)
 
 
+@app.get("/reports/latest", summary="Последний бизнес-отчёт прескоринга (неделя 6, DAG prescoring в Airflow)")
+def reports_latest(request: Request):
+    try:
+        rep = db.latest_report()
+    except db.DatabaseUnavailable as e:
+        raise db_down(request, e)
+    if rep is None:
+        raise HTTPException(status_code=404, detail="Отчётов пока нет: запустите DAG prescoring в Airflow")
+    return rep
+
+
 @app.get("/health", summary="Сервис жив, модель загружена, база доступна")
 def health():
     s: OnlineScorer = STATE.get("scorer")

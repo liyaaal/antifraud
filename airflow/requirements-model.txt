@@ -1,0 +1,14 @@
+# Окружение модели внутри образа Airflow: те же версии, что при обучении (requirements.txt проекта).
+# Ставится в отдельный venv на Python 3.13, потому что сам Airflow 2.10 требует pandas < 2.2,
+# а модель обучена на pandas 3 / numpy 2.5 — в одном окружении они конфликтуют.
+numpy==2.5.3
+pandas==3.0.6
+pyarrow==25.0.1
+scipy==1.18.1
+scikit-learn==1.9.1
+lightgbm==4.7.0
+joblib==1.6.0
+threadpoolctl==3.7.0
+PyYAML==6.0.3
+python-dateutil==2.9.0.post0
+tzdata==2026.4
